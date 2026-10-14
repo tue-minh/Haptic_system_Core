@@ -1,0 +1,8 @@
+# Taste
+- Prefers plain, uncluttered interfaces: explicitly asked to avoid a colorful UI and "just make it simple" — decorative colour (axis-tinted readouts, accent buttons, coloured headers) should be stripped in favour of neutral greys. Confidence: 0.85
+- Accepts colour only where it carries information (status LEDs, destructive/stop actions, a monochrome-by-default data colormap); distinguish other elements by lightness and line style rather than hue. Confidence: 0.7
+- Prefers a light theme with a bright background over a dark one; lighter surfaces are the desired default look. Confidence: 0.65
+- When a known-working reference implementation exists, follow it rather than written specs or docs where they conflict — explicitly asked to "just make it following these files" after a spec-derived divergence broke real hardware behaviour. Confidence: 0.8
+- Trusts empirical evidence from actually running the working code/hardware over spec assumptions; treats "the reference ran with no error" as the authority to match. Confidence: 0.65
+- For hardware control surfaces, expects directional controls to be arranged spatially to mirror the physical axes and their sign conventions (e.g. jog buttons grouped per axis as a cross/d-pad, one axis pair vertical, the other horizontal, with the negative/positive order matching the machine), rather than as a flat list of buttons. Confidence: 0.5
+- Wants GUI features to mirror the reference tool's UX (e.g. live reference-style pyqtgraph taxel view over a slower throttled alternative, automatic port assignment) rather than diverge into novel designs. Confidence: 0.6

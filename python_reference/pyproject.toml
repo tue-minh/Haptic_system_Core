@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tue-acsi"
+version = "1.0.0"
+description = "Host-side client for the TUE ACSI command protocol (STM32F407 MM_Control USB CDC)"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = ["pyserial>=3.5"]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0.0"]
+
+[tool.setuptools]
+packages = ["tue_acsi"]

@@ -1,0 +1,9 @@
+# Unified GUI runtime dependencies
+PyQt6>=6.5
+pyqtgraph>=0.13
+pyserial>=3.5
+numpy>=1.24
+matplotlib>=3.6
+
+# Optional: hardware-accelerated 3D (the app falls back to Matplotlib 3D without it)
+# PyOpenGL>=3.1
