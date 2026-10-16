@@ -2,7 +2,7 @@
 
 Roles
 -----
-``motor``     TUE ACSI board (CoreXY + Z steppers, STS3215 gripper).
+``motor``     TUE USB board (CoreXY + Z steppers, STS3215 gripper).
 ``sensor_l``  Left PaXini tactile sensor board.
 ``sensor_r``  Right PaXini tactile sensor board.
 
