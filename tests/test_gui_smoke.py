@@ -53,14 +53,46 @@ class GuiSmokeTests(unittest.TestCase):
             self.assertIsNotNone(window.sensor_monitor)
             self.assertEqual(window.links, {})
             self.assertFalse(window.recorder.active)
+            self.assertIsNone(window.haptic)
             # panes exist for both fingers even before connection
             self.assertEqual(set(window.taxel_map.maps), {"L", "R"})
             self.assertEqual(set(window.view3d._panes), {"L", "R"})
+            # taxel map, 3D cloud and the 5-valve haptic map share the tabs
+            self.assertEqual(window.surface_tabs.count(), 3)
+            self.assertIsNotNone(window.valve_map)
             # the live map is the default view; the CPU-rendered 3D sits behind it
             self.assertIs(window.surface_tabs.currentWidget(), window.taxel_map)
             window.stepper.release_jogs()  # watchdog no-op when idle
         finally:
             window.close()
+
+    def test_haptic_role_is_known(self):
+        from unified_gui.panels.connection import DEFAULT_BAUD, ROLES, ROLE_LABELS
+
+        self.assertIn("haptic", ROLES)
+        self.assertEqual(DEFAULT_BAUD["haptic"], 1_000_000)
+        self.assertIn("Haptic", ROLE_LABELS["haptic"])
+
+    def test_valve_map_plots_five_valves(self):
+        from unified_gui.haptic import HapticSnapshot, TueBinaryEncoder
+        from unified_gui.valvemap import ValveMapView
+
+        view = ValveMapView()
+        self.assertEqual(len(view.scatter.data), 5)   # one point per valve
+
+        payload = bytes([20, 20, 10, 255, 0, 0, 0x03, 0])
+        snap = HapticSnapshot.from_payload(payload, 1.0, 0.25,
+                                           frame=TueBinaryEncoder().encode(payload))
+        view.update_snapshot(snap)
+        self.assertEqual(len(view.scatter.data), 5)
+        self.assertEqual(view.table.item(0, 0).text(), "A")
+        self.assertEqual(view.table.item(3, 0).text(), "D")
+        self.assertEqual(view.table.item(0, 2).text().strip(), "1.00")   # A: shear*1.0
+        self.assertEqual(view.table.item(3, 2).text().strip(), "2.00")   # D: Fz_Left
+        self.assertIn("AA 55", view.lbl_frame.text())
+
+        view.update_snapshot(None)                    # offline -> dashes
+        self.assertEqual(view.table.item(2, 2).text(), "---")
 
     def test_sensor_baud_matches_the_reference_reader(self):
         import paxini_usb_core as core

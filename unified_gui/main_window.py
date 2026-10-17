@@ -16,6 +16,8 @@ import os
 import queue
 from typing import Dict, Optional
 
+import numpy as np
+
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import Qt
 
@@ -23,11 +25,13 @@ from . import _paths  # noqa: F401
 from ._paths import REPO_ROOT
 import paxini_usb_core as core
 from .deps import verify
+from .haptic import HapticPayloadSynthesizer, HapticSnapshot, Stm32HapticStreamer, TueBinaryEncoder
 from .motor import MotorWorker
 from .recording import RecordingManager
 from .sensors import SensorLink, STATE_CONNECTING, STATE_ERROR, STATE_STREAMING
 from .plot3d import Tactile3DView
 from .taxelmap import TaxelMapView
+from .valvemap import ValveMapView
 from .panels.connection import ConnectionPanel, ROLE_LABELS
 from .panels.motor import GripperPanel, StepperPanel
 from .panels.recording import RecordingPanel
@@ -47,6 +51,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._log_q: "queue.SimpleQueue[str]" = queue.SimpleQueue()
         self.motor: Optional[MotorWorker] = None
         self.links: Dict[str, SensorLink] = {}
+        self.haptic: Optional[Stm32HapticStreamer] = None
+        self._haptic_preview = HapticPayloadSynthesizer()
+        self._haptic_preview_enc = TueBinaryEncoder()
         self.recorder = RecordingManager(self.post_log, DEFAULT_OUTPUT_DIR)
         self._tick = 0
 
@@ -115,13 +122,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sensor_monitor = SensorMonitorPanel(self.post_log)
         right_split.addWidget(self.sensor_monitor)
 
-        surface_box = QtWidgets.QGroupBox("Tactile surface  (52 taxels)")
+        surface_box = QtWidgets.QGroupBox("Tactile surface & haptic output")
         sv = QtWidgets.QVBoxLayout(surface_box)
         self.surface_tabs = QtWidgets.QTabWidget()
         self.taxel_map = TaxelMapView({})
         self.view3d = Tactile3DView({})
+        self.valve_map = ValveMapView()
         self.surface_tabs.addTab(self.taxel_map, "Taxel map (live)")
         self.surface_tabs.addTab(self.view3d, "3D cloud")
+        self.surface_tabs.addTab(self.valve_map, "Haptic valves (5)")
         self.surface_tabs.setCurrentIndex(0)
         sv.addWidget(self.surface_tabs)
         right_split.addWidget(surface_box)
@@ -206,6 +215,8 @@ class MainWindow(QtWidgets.QMainWindow):
         baud = self.connection.selected_baud(role)
         if role == "motor":
             self._connect_motor(port, baud)
+        elif role == "haptic":
+            self._connect_haptic(port, baud)
         else:
             self._connect_sensor("L" if role == "sensor_l" else "R", port, baud)
 
@@ -230,14 +241,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self._rebind_sensor_views()
         self.post_log(f"connecting {link.label} sensor on {port} @ {baud} baud")
 
+    def _connect_haptic(self, port: str, baud: int) -> None:
+        if self.haptic is not None:
+            return
+        streamer = Stm32HapticStreamer(
+            port, baudrate=baud, log=self.post_log, clock=core.now)
+        self.haptic = streamer
+        streamer.start()
+        self.connection.set_state("haptic", "connecting", f"{port} @ {baud}")
+        self.post_log(f"connecting haptic stream on {port} @ {baud} baud (CAN 0x300, 100 Hz)")
+
     def _connect_all(self) -> None:
-        for role in ("motor", "sensor_l", "sensor_r"):
+        for role in ("motor", "sensor_l", "sensor_r", "haptic"):
             if not self.connection.is_connected(role):
                 self._connect_role(role)
 
     def _disconnect_role(self, role: str) -> None:
         if role == "motor":
             self._disconnect_motor()
+        elif role == "haptic":
+            self._disconnect_haptic()
         else:
             tag = "L" if role == "sensor_l" else "R"
             self._disconnect_sensor(tag)
@@ -252,6 +275,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gripper.bind(None)
         self.connection.set_state("motor", "off", "-")
         self.post_log("motor board disconnected")
+
+    def _disconnect_haptic(self) -> None:
+        streamer, self.haptic = self.haptic, None
+        if streamer is not None:
+            streamer.shutdown()
+            streamer.join(timeout=1.5)
+        self.connection.set_state("haptic", "off", "-")
+        self.post_log("haptic stream disconnected")
 
     def _disconnect_sensor(self, tag: str) -> None:
         if self.recorder.active:
@@ -276,6 +307,7 @@ class MainWindow(QtWidgets.QMainWindow):
             role = "sensor_l" if tag == "L" else "sensor_r"
             self.connection.set_state(role, "off", "-")
         self._disconnect_motor()
+        self._disconnect_haptic()
         self._rebind_sensor_views()
 
     def _rebind_sensor_views(self) -> None:
@@ -340,10 +372,49 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.surface_tabs.currentWidget() is self.view3d:
             self.view3d.update_readings(readings)
 
+        self._update_haptic(readings)
+
         if self._tick % 15 == 0:
             self._update_recording_status()
             self._maybe_autostop_recording()
             self._update_status_bar(snap)
+
+    # --------------------------------------------------------------- haptic
+    @staticmethod
+    def _haptic_side(reading):
+        """Flatten one sensor snapshot into the synthesizer's input contract."""
+        if reading is None:
+            return None
+        tax = reading.taxels
+        fz = None if tax is None else np.asarray(tax, dtype=float)[:, 2]
+        return {
+            "fz": reading.fz,
+            "fy": reading.fy,
+            "fx": reading.fx,
+            "cop_x": reading.cop_x,
+            "cop_y": reading.cop_y,
+            "taxels_fz": fz,
+            "t": reading.t,
+        }
+
+    def _update_haptic(self, readings) -> None:
+        left = self._haptic_side(readings.get("L"))
+        right = self._haptic_side(readings.get("R"))
+        tare = any(link.tare_active for link in self.links.values())
+
+        if self.haptic is not None:
+            self.haptic.update_sensors(left, right, tare_active=tare)
+            self.valve_map.update_snapshot(self.haptic.snapshot())
+            return
+
+        # No output link: still show what would be sent, so the tactile ->
+        # valve mapping stays visible while wiring the STM32 output.
+        now = core.now()
+        payload = self._haptic_preview.synthesize(left, right, tare_active=tare, now=now)
+        frame = self._haptic_preview_enc.encode(payload)
+        self.valve_map.update_snapshot(HapticSnapshot.from_payload(
+            payload, now, state="preview (no output link)", connected=False,
+            seq=self._haptic_preview_enc.seq - 1, frame=frame))
 
     def _update_recording_status(self) -> None:
         if self.recorder.active:
@@ -393,6 +464,20 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 self.connection.set_state(role, "off", "-")
 
+        # haptic output link
+        if self.haptic is not None:
+            hs = self.haptic.snapshot()
+            if hs.error:
+                self.connection.set_state("haptic", "error", hs.error[:40])
+            elif hs.state == "streaming" and hs.sent:
+                self.connection.set_state(
+                    "haptic", "ready",
+                    f"CAN 0x300 | {hs.rate_hz:4.1f} Hz | {hs.sent} frames")
+            elif hs.state == "streaming":
+                self.connection.set_state("haptic", "connecting", self.haptic.port)
+            else:
+                self.connection.set_state("haptic", "off", "-")
+
     def _update_status_bar(self, snap) -> None:
         parts = []
         if snap is not None and snap.connected:
@@ -404,6 +489,10 @@ class MainWindow(QtWidgets.QMainWindow):
             label = "L" if tag == "L" else "R"
             parts.append(f"{label}:{link.rate_hz:4.1f}Hz" if link.state == STATE_STREAMING
                          else f"{label}:off")
+        if self.haptic is not None:
+            hs = self.haptic.snapshot()
+            parts.append(f"haptic:{hs.rate_hz:4.1f}Hz" if hs.state == "streaming"
+                         else "haptic:off")
         if self.recorder.active:
             parts.append(f"REC {self.recorder.elapsed:6.1f}s")
         self.lbl_status.setText("   |   ".join(parts))
@@ -431,6 +520,10 @@ class MainWindow(QtWidgets.QMainWindow):
             if link is not None:
                 link.disconnect(wait=True)
         self.stepper.bind(None)
+        if self.haptic is not None:
+            self.haptic.shutdown()
+            self.haptic.join(timeout=1.5)
+            self.haptic = None
         if self.motor is not None:
             self.motor.shutdown()
             self.motor.join(timeout=1.5)

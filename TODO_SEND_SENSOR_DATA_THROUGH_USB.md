@@ -1,245 +1,273 @@
-# Action Plan: Stream Tactile Sensor Data via Motor Controller COM Port (Custom CAN Payload)
+# Host Python Specification: Tactile Haptic Synthesis & Streaming Core
 
-## 1. Executive Summary & Objective
-
-### 1.1 Goal
-Extend the **Unified PyQt6 Haptic System GUI** so that whenever **all three COM ports are connected and active** (Left Tactile Sensor, Right Tactile Sensor, and the STM32F407 Motor Controller), the system automatically starts streaming synchronized tactile sensor data—including **3-axis resultant forces**, **spatial contact position (CoP & Peak Taxel)**, and the **52-taxel distributed pressure map**—through the **motor controller USB COM port** (1,000,000 baud).
-
-### 1.2 Rationale
-The STM32F407VET6 motor controller board acts as an embedded data logger / haptic reflex controller. Receiving live tactile feedback from both fingers directly on the PCB enables:
-* Synchronized hardware-level timestamping against actual stepper motor step counts and STS3215 servo positions.
-* Future firmware-level low-latency grip force reflex loops without PC round-trip latency.
+> **Target Workspace**: Python Host Library / Application Repository (`python/tue_usb` or GUI backend)  
+> **Environment**: Python 3.9+  
+> **Reference Documents**: [`USB_PROTOCOL.md`](USB_PROTOCOL.md), [`SENSOR_DATA_UART_PROTOCOL.md`](SENSOR_DATA_UART_PROTOCOL.md), [`HAPTIC_SLAVE_FIRMWARE_SPEC.md`](HAPTIC_SLAVE_FIRMWARE_SPEC.md)  
+> **Input Interface**: Ingests pre-parsed data from Dual 6-Axis Tactile Sensor COM ports (Left & Right)  
+> **Output Interface**: USB CDC (Virtual COM Port) @ **100 Hz** (10 ms period) to STM32 Master  
 
 ---
 
-## 2. Trigger Logic: Connection State Machine
+## 1. System Context: Master-Slave Architecture & Physical Design
 
-The data streaming bridge must operate fully autonomously:
+To implement this module correctly, the agent must understand the overarching teleoperation physical setup and the distinct roles of the **Master System** and **Slave System**.
+
+```
+===================================================================================================
+                                      TELEOPERATION SYSTEM CONTEXT
+===================================================================================================
+
+       [ MASTER SYSTEM (ROBOT GRIPPER) ]                              [ SLAVE SYSTEM (OPERATOR HAPTICS) ]
+       
+         Left Jaw Sensor      Right Jaw Sensor                           Wearable Pneumatic Sleeve (SUP/Ring)
+          (USB COM Port)       (USB COM Port)                                 On Single Operator Finger
+        ┌───────────────┐    ┌───────────────┐                               
+        │ Chuôi (Base)  │    │ Chuôi (Base)  │                                   Chamber D (Hông Trái)
+        │     Giữa      │    │     Giữa      │                                            ▼
+        │  Ngọn (Tip)   │    │  Ngọn (Tip)   │                                ┌───────────────────────┐
+        └───────┬───────┘    └───────┬───────┘                                │   NGÓN TAY NGƯỜI ĐEO  │
+                │ Fz_L               │ Fz_R                                   └───────────────────────┘
+                └─────────┬──────────┘                                                    ▲
+                          │                                                      Chamber E (Hông Phải)
+                          ▼                                                  
+                   [ 2x USB Ports ]                                          [ MẶT DƯỚI ĐỆM NGÓN TAY ]
+                          │                                                  ┌───────┬───────┬───────┐
+                          ▼                                                  │   A   │   B   │   C   │
+                ┌──────────────────┐                                         └───────┴───────┴───────┘
+                │     HOST PC      │                                           Ngọn    Giữa    Chuôi
+                │  (PYTHON CORE)   │                                          (Tip)    (Mid)   (Base)
+                └─────────┬────────┘                                                      ▲
+                          │                                                               │
+                          ▼ (USB CDC @ 1 Mbps, CAN ID 0x300, 20 Bytes)                    │
+                ┌──────────────────┐                                                      │
+                │  STM32F407 MASTER│ ────────► (Hardware UART @ 250k baud, 20 Bytes) ─────┘
+                │   (ROBOT PCB)    │                ESP32 WROOM SLAVE CONTROLLER
+                └──────────────────┘                 (5x MCP4725 DACs -> 5 Valves)
+===================================================================================================
+```
+
+### 1.1 Master System Overview (Robotic Gripper)
+* **Kinematics**: 2-finger parallel robotic gripper (Left Jaw and Right Jaw).
+* **Sensor Instrumentation**: Each jaw is equipped with an advanced 6-axis tactile sensor array.
+  * **Physical Mounting Orientation**: The gripper fingers point **vertically downward** toward the workspace (Ngọn/Tip pointing down, Chuôi/Base pointing up).
+  * **Sensed Modalities per Jaw**:
+    * 3-Axis Resultant Forces: $F_z$ (Normal clamping force), $F_y$ (Longitudinal shear force along finger length), $F_x$ (Lateral shear force across finger width).
+    * Spatial Contact: Center of Pressure ($\text{CoP}_x, \text{CoP}_y$).
+    * Distributed Pressure Array: 52 discrete taxel normal forces ($F_{z, 1..52}$) mapped across the sensor pad.
+  * **Host Connection**: 2 dedicated USB COM ports connected directly to the Host PC for sensor data acquisition.
+* **Master Controller**: STM32F407VET6 board responsible for CoreXY/Z motion and gripper actuation, connected to the Host PC via USB CDC (Virtual COM Port @ 1 Mbps).
+
+---
+
+### 1.2 Slave System Overview & Physical Actuator Design
+* **Target User Device**: A wearable soft pneumatic thimble/ring sleeve (SUP/Ring) worn on a **single finger** (e.g., index finger) of the human operator.
+* **Slave Controller**: ESP32-WROOM microcontroller connected to the STM32 Master board via hardware UART @ 250,000 baud.
+* **Actuation Mechanism**: 5 proportional pneumatic air valves controlled by 5x MCP4725 12-bit DACs (A, B, C, D, E) via a PCA9548A I2C multiplexer.
+* **Physical Layout of the 5 Pneumatic Silicone Chambers**:
+  1. **2 Lateral Side Chambers (Van D & Van E)**:
+     * Located on the **Left side** and **Right side** of the finger.
+     * **Tactile Role**: Render the **Bilateral Clamping Forces ($F_{z, L}$ and $F_{z, R}$)** exerted by the two gripper jaws. When the robot clamps an object, chambers D and E inflate to squeeze the operator's finger from both sides, conveying grip firmness and asymmetric contact.
+  2. **3 Underside / Palmar Pad Chambers (Van A, Van B, Van C)**:
+     * Located along the **underside of the finger pad**, arranged longitudinally from tip to base:
+       * **Chamber A (Distal Tip - Ngọn ngón)**: Located under the fingertip. Maps to contact/slip occurring at the **Tip (Ngọn)** of the downward-pointing gripper jaws (Zone 1 of the 52-taxel map).
+       * **Chamber B (Medial Mid - Giữa đệm ngón)**: Located under the central finger pad. Maps to contact/slip occurring at the **Center (Giữa)** of the gripper jaws (Zone 2 of the 52-taxel map).
+       * **Chamber C (Proximal Base - Chuôi đệm ngón)**: Located near the finger joint. Maps to contact/slip occurring at the **Base (Chuôi)** of the gripper jaws (Zone 3 of the 52-taxel map).
+     * **Tactile Role**: Render the **Object Weight / Longitudinal Slipping Force ($\bar{F}_{\text{shear}}$ from $F_y$)**, dynamically steered to chambers A, B, or C according to the contact position ($w_A, w_B, w_C$).
+
+---
+
+### 1.3 Why this Host Python Module Exists
+* The Host PC receives raw high-dimensional data (104 discrete taxels + two 6-axis force vectors) from the two sensor USB ports.
+* The physical slave thimble only has 5 actuator chambers (A, B, C, D, E), and the bridge link between STM32 and ESP32 operates at 250,000 baud.
+* Forwarding raw uncompressed data across the UART would consume **96% of the 250k baud bandwidth**, causing buffer overflows, latency jitter, and CPU overload on the ESP32.
+* **Role of this Python Core**: Synthesize the 104-taxel multi-axis dataset into **ONE unified 8-byte payload** that maps directly onto the slave's 5 valves, pack it into a standard **20-byte TUE Binary Protocol frame (CAN ID: `0x300`)**, and stream it via USB CDC to the STM32 at **100 Hz**.
+
+---
+
+## 2. Input & Output Data Contracts
+
+### 2.1 Input Data Contract (From Dual Sensor Ingestion Threads)
+The module expects pre-parsed dictionaries or objects from the Left and Right sensor ingestion threads:
+
+| Field Name | Type | Units | Description |
+|:---|:---:|:---:|:---|
+| `fz` | `float` | $\text{N}$ | Normal force perpendicular to the sensor pad |
+| `fy` | `float` | $\text{N}$ | Longitudinal shear force (along finger length, pointing downward) |
+| `fx` | `float` | $\text{N}$ | Lateral shear force (across finger width) |
+| `cop_x`, `cop_y` | `float` | $\text{mm}$ | 2D Center of Pressure coordinates |
+| `taxels_fz` | `List[float]` | $\text{N}$ | Array of 52 discrete taxel normal forces ($F_{z, 1..52}$) |
+
+---
+
+### 2.2 Output Wire Frame Contract (To STM32 USB CDC)
+A fixed **20-byte packet** conforming to the TUE Binary Protocol:
+
+| Byte Offset | Field Name | Type | Value / Scaling | Target Slave Actuator / Role |
+|:---:|:---|:---:|:---|:---|
+| `0` | `SOF1` | `uint8` | `0xAA` | Preamble byte 1 |
+| `1` | `SOF2` | `uint8` | `0x55` | Preamble byte 2 |
+| `2` | `FRAME_TYPE` | `uint8` | `0x01` | `FRAME_TYPE_REQ` (Host to MCU request) |
+| `3..6` | `CAN_ID` | `uint32` | `0x00000300` | 32-bit CAN ID in Little-Endian (`0x00, 0x03, 0x00, 0x00`) |
+| `7` | `DLC` | `uint8` | `0x08` | Payload length: strictly 8 bytes |
+| `8` | `SEQ` | `uint8` | `0..255` | Rolling packet sequence counter |
+| **`9`** | **`Fz_Left`** | `uint8` | $0.1\text{ N}$ / LSB ($0..25.5\text{ N}$) | **Van D (Hông trái ngón)** — Má kẹp trái |
+| **`10`** | **`Fz_Right`** | `uint8` | $0.1\text{ N}$ / LSB ($0..25.5\text{ N}$) | **Van E (Hông phải ngón)** — Má kẹp phải |
+| **`11`** | **`F_shear_avg`** | `uint8` | $0.1\text{ N}$ / LSB ($0..25.5\text{ N}$) | **Độ lớn lực trượt / trọng lượng tổng** |
+| **`12`** | **`Weight_Tip`** ($w_A$) | `uint8` | $0..255$ ($0.0 .. 1.0$) | **Tỉ lệ kích hoạt Van A (Ngọn ngón tay)** |
+| **`13`** | **`Weight_Mid`** ($w_B$) | `uint8` | $0..255$ ($0.0 .. 1.0$) | **Tỉ lệ kích hoạt Van B (Giữa đệm ngón)** |
+| **`14`** | **`Weight_Base`** ($w_C$)| `uint8` | $0..255$ ($0.0 .. 1.0$) | **Tỉ lệ kích hoạt Van C (Chuôi đệm ngón)** |
+| **`15`** | **`Status_Flags`** | `uint8` | Bitmask | Bit 0: Left contact, Bit 1: Right contact, Bit 2: Slip, Bit 3: Tare |
+| **`16`** | **`Frame_Counter`** | `uint8` | $0..255$ | Rolling cycle counter for loss detection |
+| `17` | `CRC8` | `uint8` | SAE J1850 | Checksum calculated over Bytes `2 .. 16` |
+| `18` | `EOF1` | `uint8` | `0x55` | Postamble byte 1 |
+| `19` | `EOF2` | `uint8` | `0xAA` | Postamble byte 2 |
+
+---
+
+## 3. Mathematical Synthesis Rules & Algorithms
+
+The implementing agent must implement the following mathematical transformations:
+
+### 3.1 Bilateral Clamping Forces ($F_{z, L}, F_{z, R}$)
+Extract normal forces from Left and Right sensors, clamp to $0.0 .. 25.5\text{ N}$, scale by 10, and cast to `uint8`:
+$$\text{Byte}[0] = \min(255, \max(0, \text{round}(F_{z, \text{Left}} \times 10.0)))$$
+$$\text{Byte}[1] = \min(255, \max(0, \text{round}(F_{z, \text{Right}} \times 10.0)))$$
+
+### 3.2 Average Slip / Weight Force ($\bar{F}_{\text{shear}}$)
+Because the gripper fingers point downward toward the ground, gravity and slippage pull along the longitudinal shear vector ($F_y$ by default, or $F_x$ if mounted horizontally):
+$$F_{\text{shear}, L} = |F_{y, L}|, \quad F_{\text{shear}, R} = |F_{y, R}|$$
+$$\bar{F}_{\text{shear}} = \frac{F_{\text{shear}, L} + F_{\text{shear}, R}}{2.0}$$
+$$\text{Byte}[2] = \min(255, \max(0, \text{round}(\bar{F}_{\text{shear}} \times 10.0)))$$
+
+### 3.3 3-Zone Spatial Weighting ($w_A, w_B, w_C$)
+The 52 discrete taxels are partitioned into 3 geometric bands along the finger length from tip (pointing down) to base (pointing up):
+* **Zone 1: Tip / Ngọn (Taxels 0..15)** $\to$ Van A (Distal thimble pad)
+* **Zone 2: Mid / Giữa (Taxels 16..35)** $\to$ Van B (Central thimble pad)
+* **Zone 3: Base / Chuôi (Taxels 36..51)** $\to$ Van C (Proximal thimble pad)
+
+For both sensors combined ($\text{Taxel}_i = \text{Taxel}_{L, i} + \text{Taxel}_{R, i}$), compute regional force sums:
+$$S_1 = \sum_{i=0}^{15} \text{Taxel}_i, \quad S_2 = \sum_{i=16}^{35} \text{Taxel}_i, \quad S_3 = \sum_{i=36}^{51} \text{Taxel}_i, \quad S_{\text{total}} = S_1 + S_2 + S_3$$
+
+**Normalization Logic**:
+* If $S_{\text{total}} > F_{\text{contact\_threshold}}$ (e.g. $0.20\text{ N}$):
+  $$w_A = \min\left(255, \text{round}\left(255 \times \frac{S_1}{S_{\text{total}}}\right)\right)$$
+  $$w_B = \min\left(255, \text{round}\left(255 \times \frac{S_2}{S_{\text{total}}}\right)\right)$$
+  $$w_C = \max(0, 255 - (w_A + w_B))$$
+* If $S_{\text{total}} \le F_{\text{contact\_threshold}}$: Set $w_A = 0, w_B = 0, w_C = 0$.
+
+### 3.4 Status Bitmask & Frame Counter
+* **Bit 0** (`0x01`): `LEFT_CONTACT` set if $F_{z, L} > F_{\text{thresh}}$.
+* **Bit 1** (`0x02`): `RIGHT_CONTACT` set if $F_{z, R} > F_{\text{thresh}}$.
+* **Bit 2** (`0x04`): `SLIP_ALERT` set if slip detection active or localized shear ratio $|F_y / F_z| > \mu_s$.
+* **Bit 3** (`0x08`): `TARE_ACTIVE` set if baseline tare calibration is applied.
+* **Frame Counter**: Increments sequentially $0 \to 255 \to 0$ on every synthesized frame.
+
+---
+
+## 4. CRC-8 SAE J1850 Specification
+
+The checksum must strictly follow [`USB_PROTOCOL.md`](USB_PROTOCOL.md) §4:
+* **Polynomial**: `0x1D` ($x^8 + x^4 + x^3 + x^2 + 1$)
+* **Initial Value**: `0xFF`
+* **XOR Output**: `0xFF`
+* **Bit Direction**: MSB First (No reflection)
+* **Coverage**: Bytes `2 .. 16` (`FRAME_TYPE` through `Frame_Counter`, total 15 bytes)
+* **Test Vector**: `CRC8(b"123456789") == 0x4B`
+* *Guideline*: Implement via a precomputed 256-entry lookup table for sub-microsecond execution time in Python.
+
+---
+
+## 5. Implementation Steps for the Agent
+
+Follow this modular implementation structure to build the Python module:
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Disconnected
-    Disconnected --> CheckingState: Serial Connect Event
-    CheckingState --> ActiveStreaming: Motor == CONNECTED AND Sensor_L == STREAMING AND Sensor_R == STREAMING
-    CheckingState --> Disconnected: Any port disconnected
-    ActiveStreaming --> ActiveStreaming: Stream CAN Packets @ 50-100 Hz
-    ActiveStreaming --> CheckingState: Any port drops or errors
+flowchart TD
+    M1["Component 1: HapticPayloadSynthesizer<br>(Feature extraction & 8-byte packing)"]
+    M2["Component 2: TueBinaryEncoder<br>(Header, CRC-8, 20-byte wire framing)"]
+    M3["Component 3: Stm32HapticStreamer<br>(Thread-safe 100 Hz serial transmission loop)"]
+
+    M1 --> M2 --> M3
 ```
 
-### Trigger Condition Specification
-In the GUI polling loop (`unified_gui/main_window.py` -> `_on_tick`):
-```python
-all_connected = (
-    self.motor is not None
-    and self.motor.snapshot().connected
-    and self.links.get("L") is not None
-    and self.links["L"].state == "streaming"
-    and self.links.get("R") is not None
-    and self.links["R"].state == "streaming"
-)
-```
-* **Auto-Start**: When `all_connected` transitions from `False` to `True`, the `SensorCanBridge` starts transmitting.
-* **Auto-Pause/Stop**: If any port drops, disconnects, or errors, transmission ceases immediately.
-* **Auto-Resume**: When the missing port is reconnected, transmission resumes seamlessly without requiring a GUI restart.
-
----
-
-## 3. Custom CAN Packet Protocol Specification
-
-The motor controller COM port runs at **1,000,000 baud** (8-N-1). Because the existing link carries ASCII text for motor commands (`<TARGET> <ID> <DIR> <FIELD> [ARGS...] \n`), the sensor CAN packets must use a **distinct binary framing envelope** that the STM32 firmware can parse unambiguously without colliding with ACSI commands.
-
-### 3.1 Binary CAN-over-UART Frame Envelope
-
-Every CAN frame is encapsulated in a lightweight, robust 14-to-18 byte binary packet:
-
-```
-+------------+------------+---------------+------------+---------+------------------+------------+------------+
-| SOF (2B)   | Frame Type | CAN ID (4B)   | DLC (1B)   | Seq (1B)| Payload (0..8B)  | CRC8 (1B)  | EOF (2B)   |
-| 0xAA 0x55  | 1 Byte     | uint32 (LE)   | 0..8       | uint8   | DLC Bytes        | SAE J1850  | 0x55 0xAA  |
-+------------+------------+---------------+------------+---------+------------------+------------+------------+
-```
-
-* **SOF (Start of Frame)**: `0xAA 0x55` (Distinct from ACSI ASCII text which starts with digits `1..4`).
-* **Frame Type**: `0x01` = Standard Classic CAN (8-byte payload), `0x02` = CAN-FD (up to 64 bytes).
-* **CAN ID**: Standard 11-bit or 29-bit identifier (Little Endian, uint32).
-* **DLC (Data Length Code)**: Number of payload bytes (`0x08` for classic CAN).
-* **Seq**: Rolling sequence counter (0–255) for frame loss detection.
-* **Payload**: 8 bytes formatted per CAN ID (detailed below).
-* **CRC8**: CRC-8-SAE J1850 (polynomial $0x1D$, init $0xFF$) computed over `[Frame Type ... Payload]`.
-* **EOF (End of Frame)**: `0x55 0xAA`.
-
----
-
-### 3.2 CAN ID Allocation Table
-
-Standard 11-bit CAN Identifiers (`0x300` – `0x32F` reserved for Tactile Telemetry):
-
-| CAN ID | Sensor | Description | DLC | Rate |
-| :--- | :--- | :--- | :--- | :--- |
-| `0x300` | Sync | Master Synchronization & Timestamp Heartbeat | 8 | 100 Hz |
-| `0x301` | **Left** | Resultant Force ($F_x, F_y, F_z, |F|$) | 8 | 100 Hz |
-| `0x302` | **Left** | Contact Position ($\text{CoP}_x, \text{CoP}_y, \text{Peak Taxel}, \text{Contact Count}$) | 8 | 100 Hz |
-| `0x303` | **Right** | Resultant Force ($F_x, F_y, F_z, |F|$) | 8 | 100 Hz |
-| `0x304` | **Right** | Contact Position ($\text{CoP}_x, \text{CoP}_y, \text{Peak Taxel}, \text{Contact Count}$) | 8 | 100 Hz |
-| `0x310`..`0x316` | **Left** | 52-Taxel Distributed Map Chunks (Chunks 0..6) | 8 | 50 Hz |
-| `0x320`..`0x326` | **Right** | 52-Taxel Distributed Map Chunks (Chunks 0..6) | 8 | 50 Hz |
-
----
-
-### 3.3 Payload Bit-Level Layouts
-
-#### Packet 1: Master Sync & Timestamp (`0x300`)
-Carries host synchronized millisecond clock and sensor status flags.
-```
-Byte 0..3: uint32_t timestamp_ms  - Monotonic milliseconds since system start
-Byte 4:    uint8_t  sensor_status - Bit 0: Left streaming, Bit 1: Right streaming, Bit 2: Tare active
-Byte 5:    uint8_t  reserved      - 0x00
-Byte 6..7: uint16_t frame_index   - Global 16-bit cycle counter
-```
-
-#### Packet 2: Resultant Forces (`0x301` for Left, `0x303` for Right)
-All forces encoded as 16-bit signed integers in **centi-Newtons ($0.01\text{ N}$ / LSB)**, range $\pm 327.67\text{ N}$.
-```
-Byte 0..1: int16_t Fx_cN   - Shear force X  (Value = int16(Fx * 100.0))
-Byte 2..3: int16_t Fy_cN   - Shear force Y  (Value = int16(Fy * 100.0))
-Byte 4..5: int16_t Fz_cN   - Normal force Z (Value = int16(Fz * 100.0))
-Byte 6..7: uint16_t Fmag_cN - Total magnitude |F| (Value = uint16(F_mag * 100.0))
-```
-
-#### Packet 3: Contact Position & CoP (`0x302` for Left, `0x304` for Right)
-Coordinates in **centi-millimeters ($0.01\text{ mm}$ / LSB)**, range $\pm 327.67\text{ mm}$.
-```
-Byte 0..1: int16_t CoP_x_cmm - Center of Pressure X coordinate (Value = int16(CoP_x * 100.0))
-Byte 2..3: int16_t CoP_y_cmm - Center of Pressure Y coordinate (Value = int16(CoP_y * 100.0))
-Byte 4:    uint8_t peak_taxel - Index of peak normal force taxel (1..52, or 0 if no contact)
-Byte 5:    uint8_t contact_n  - Number of taxels in contact (0..52)
-Byte 6..7: int16_t tilt_cdeg  - Force vector tilt angle (Value = int16(tilt_deg * 10.0), 0.1 deg/LSB)
-```
-*(Note: If CoP is invalid/NaN due to no contact, `CoP_x_cmm` and `CoP_y_cmm` are set to `0x7FFF`).*
-
-#### Packet 4: Distributed Taxel Map Chunks (`0x310..0x316` Left, `0x320..0x326` Right)
-The 52 normal forces $F_{z, 1..52}$ are packed into 7 consecutive CAN frames (8 bytes per frame = 56 slots; the last 4 bytes of chunk 6 are padded with `0x00`).
-Each taxel normal force is encoded as **1 byte unsigned ($0.1\text{ N/LSB}$)** matching the native PaXini sensor hardware resolution ($0..25.5\text{ N}$):
-
-* **Chunk 0 (`0x310` / `0x320`)**: Taxels 1 through 8
-* **Chunk 1 (`0x311` / `0x321`)**: Taxels 9 through 16
-* **Chunk 2 (`0x312` / `0x322`)**: Taxels 17 through 24
-* **Chunk 3 (`0x313` / `0x323`)**: Taxels 25 through 32
-* **Chunk 4 (`0x314` / `0x324`)**: Taxels 33 through 40
-* **Chunk 5 (`0x315` / `0x325`)**: Taxels 41 through 48
-* **Chunk 6 (`0x316` / `0x326`)**: Taxels 49 through 52 + 4 bytes padding (`0x00`)
-
-*(Optional CAN-FD Mode: If the STM32 firmware is configured for CAN-FD, a single 64-byte payload packet with CAN ID `0x330` for Left and `0x331` for Right delivers all 52 taxels in one shot).*
-
----
-
-### 3.4 Bandwidth & Timing Verification
-
-* At 100 Hz resultant rate + 50 Hz taxel map rate:
-  * Resultant + CoP packets: 4 packets $\times 16\text{ bytes} \times 100\text{ Hz} = 6,400\text{ B/s}$
-  * Taxel map packets: 14 packets $\times 16\text{ bytes} \times 50\text{ Hz} = 11,200\text{ B/s}$
-  * Sync heartbeat: 1 packet $\times 16\text{ bytes} \times 100\text{ Hz} = 1,600\text{ B/s}$
-  * **Total bandwidth:** $\approx 19.2\text{ kB/s} = 192,000\text{ bps}$.
-* Serial baud rate: **1,000,000 bps**.
-* **Bus utilization:** $< 20\%$, leaving $> 80\%$ channel capacity for motor motion commands (`step_jog`, `step_move`, telemetry polling).
-
----
-
-## 4. Software Implementation Roadmap (Actions Instruction)
-
-Follow these modular steps to implement the feature without regressing existing GUI functionality.
-
-### Step 4.1: Create `unified_gui/can_bridge.py`
-Create a dedicated bridge module containing:
-1. `class CanPacketBuilder`: Helper methods to pack resultant force, CoP position, and taxel map arrays into byte arrays with CRC-8 and framing bytes (`0xAA 0x55 ... 0x55 0xAA`).
-2. `class SensorCanBridge(threading.Thread)`:
-   * Thread-safe worker running at 100 Hz.
-   * Reads snapshots from `SensorLink.reading()` for both Left and Right sensors.
-   * Assembles packets and writes binary chunks directly to the motor controller serial stream via a thread-safe callback.
-   * Includes rate statistics and frame counters.
-
-### Step 4.2: Expose Raw Binary Serial Write in `unified_gui/motor.py`
-In `MotorWorker`:
-* Add a thread-safe method `write_raw(self, data: bytes) -> None` that sends urgent or telemetry bytes directly through `self._client._ser.write(data)` protected by `self._lock` or dedicated serial write lock.
-
-### Step 4.3: Integrate Connection Trigger in `unified_gui/main_window.py`
-In `MainWindow`:
-* Instantiate `self.can_bridge = SensorCanBridge(self._write_motor_raw, log=self.post_log)`.
-* In `_on_tick(self)`:
+### Step 1: Implement `HapticPayloadSynthesizer`
+* **Class Responsibility**: State-free or rolling-counter feature extraction engine.
+* **Constructor Arguments**: `shear_axis: str = "Y"`, `contact_thresh: float = 0.20`.
+* **Primary Method**:
   ```python
-  all_ready = (
-      self.motor is not None
-      and self.motor.snapshot().connected
-      and self.links.get("L") is not None
-      and self.links["L"].state == "streaming"
-      and self.links.get("R") is not None
-      and self.links["R"].state == "streaming"
-  )
-  if all_ready and not self.can_bridge.is_active:
-      self.can_bridge.start_streaming(self.links["L"], self.links["R"])
-      self.post_log("[Bridge] All 3 ports active: streaming tactile CAN packets to motor COM")
-  elif not all_ready and self.can_bridge.is_active:
-      self.can_bridge.stop_streaming()
-      self.post_log("[Bridge] Port disconnected: paused tactile CAN streaming")
+  def synthesize(left_data: dict, right_data: dict, slip_alert: bool = False, tare_active: bool = False) -> bytes:
+      # Returns exactly 8 bytes (struct.pack("BBBBBBBB", ...))
   ```
-* On GUI shutdown (`closeEvent`), ensure `self.can_bridge.stop()` is cleanly joined.
+* Handle edge cases: missing dictionary keys (use `.get(key, 0.0)`), empty taxel arrays (pad with zeros).
 
-### Step 4.4: Add UI Indicator in `unified_gui/panels/connection.py`
-* Add a small LED status dot and label in the Connection Panel:
-  * `CAN Stream: INACTIVE` (Gray)
-  * `CAN Stream: STREAMING 100Hz` (Bright Green)
+### Step 2: Implement `TueBinaryEncoder`
+* **Class Responsibility**: Protocol envelope assembly and CRC computation.
+* **Class Constants**: `SOF1 = 0xAA`, `SOF2 = 0x55`, `EOF1 = 0x55`, `EOF2 = 0xAA`, `FRAME_TYPE = 0x01`, `CAN_ID = 0x00000300`, `DLC = 0x08`.
+* **Primary Method**:
+  ```python
+  def encode(payload: bytes) -> bytes:
+      # Validates len(payload) == 8
+      # Packs Little-Endian Header: struct.pack("<BI2B", FRAME_TYPE, CAN_ID, DLC, seq)
+      # Computes SAE J1850 CRC-8 over header + payload
+      # Returns exact 20 bytes
+  ```
 
----
-
-## 5. Firmware (STM32F407) Implementation Reference
-
-For the firmware engineer flashing the STM32F407 motor controller PCB:
-
-### 5.1 C Data Structures
-```c
-#pragma pack(push, 1)
-
-typedef struct {
-    int16_t fx_cN;      // 0.01 N
-    int16_t fy_cN;      // 0.01 N
-    int16_t fz_cN;      // 0.01 N
-    uint16_t f_mag_cN;  // 0.01 N
-} CanPayload_Force_t;
-
-typedef struct {
-    int16_t cop_x_cmm;   // 0.01 mm (0x7FFF = Invalid/No contact)
-    int16_t cop_y_cmm;   // 0.01 mm (0x7FFF = Invalid/No contact)
-    uint8_t peak_taxel;  // 1..52 (0 = none)
-    uint8_t contact_n;   // 0..52
-    int16_t tilt_cdeg;   // 0.1 deg
-} CanPayload_Position_t;
-
-typedef struct {
-    uint8_t taxel_fz[8]; // 0.1 N per LSB
-} CanPayload_TaxelChunk_t;
-
-#pragma pack(pop)
-```
-
-### 5.2 UART/USB RX Stream Parser (State Machine)
-Implement in the USB VCP receive interrupt / thread:
-* If byte is ASCII (e.g. `'1'..'4'`), route to existing ACSI command parser.
-* If header matches `0xAA 0x55`, route to binary CAN frame unpacker:
-  1. Validate length and CRC-8.
-  2. Switch on `CAN_ID`:
-     * `0x301` / `0x303`: Store Left/Right Resultant Force.
-     * `0x302` / `0x304`: Store Left/Right Contact Position (CoP).
-     * `0x310..0x316` / `0x320..0x326`: Assemble 52-taxel pressure array.
-  3. Write synchronized record (Timestamp + Stepper Position + Gripper Pos + Sensor Data) into onboard DMA ring buffer for Flash/SD card write.
+### Step 3: Implement `Stm32HapticStreamer` (Threaded Worker)
+* **Class Responsibility**: Manages background transmission at regulated 100 Hz without blocking the main GUI/sensor acquisition loop.
+* **Inheritance**: Subclass of `threading.Thread(daemon=True)`.
+* **State Management**:
+  * Use a `threading.Lock()` to protect access to `left_data` and `right_data` snapshots.
+  * Provide a thread-safe method `update_sensors(left_data, right_data, slip_alert=False)`.
+* **Loop Regulation**:
+  * In `run()`: Calculate elapsed loop time using `time.perf_counter()`.
+  * Regulate sleep interval: `sleep_time = 0.010 - (time.perf_counter() - t0)`.
+  * If `sleep_time > 0`: `time.sleep(sleep_time)`.
+* **Serial Port Management**:
+  * Open serial connection: `serial.Serial(port, baudrate=1000000, timeout=0.05)`.
+  * Provide clean `open()` and `close()` lifecycle methods with thread termination join.
 
 ---
 
-## 6. Verification and Validation Checklist
+## 6. Robustness & Edge Case Handling
 
-Before releasing the updated GUI:
-- [ ] **Handshake Test**: Connect Motor only. Verify motor commands and jog buttons operate normally.
-- [ ] **Dual Sensor Test**: Connect Sensor L and Sensor R. Verify 2D plots and 3D point cloud update normally.
-- [ ] **Trigger Activation Test**: Connect Motor + Sensor L + Sensor R simultaneously. Verify the CAN bridge begins transmitting immediately without drops.
-- [ ] **Disconnection Resilience Test**: Unplug Sensor L while streaming. Verify CAN bridge stops cleanly and motor remains controllable without serial buffer lockup.
-- [ ] **Reconnection Test**: Replug Sensor L and reconnect. Verify CAN bridge resumes streaming automatically.
-- [ ] **Throughput Test**: Monitor serial loopback with a virtual COM or logic analyzer; verify packet frequency is steady at 100 Hz and CRC-8 check passes 100%.
+1. **Sensor Disconnection**: If a sensor stops reporting data or disconnects, the synthesizer must detect stale data (e.g. timestamp $> 100\text{ ms}$ old) and clamp that sensor's force contributions to zero.
+2. **Serial Write Protection**: Wrap `ser.write()` in a `try...except serial.SerialException` block to catch USB unplug events cleanly and log warnings without crashing the main application thread.
+3. **Array Dimension Invariant**: Always enforce that taxel arrays contain 52 elements before slicing into zones. Pad with `0.0` if shorter, or slice `[:52]` if longer.
+
+---
+
+## 7. Verification & Acceptance Criteria
+
+The implementing agent must verify the implementation against the following test benchmarks:
+
+### Test Case 1: Self-Test Vectors
+
+| Test Case | Left Sensor Input | Right Sensor Input | Expected 8-Byte Payload (Hex) | Expected 20-Byte Frame |
+|:---|:---|:---|:---|:---|
+| **Zero / Idle** | All forces = $0.0\text{ N}$ | All forces = $0.0\text{ N}$ | `00 00 00 00 00 00 00 [seq]` | CRC valid, Postamble `55 AA` |
+| **Pinch Only** | $F_z = 5.0\text{ N}$, $F_y = 0.0$ | $F_z = 3.0\text{ N}$, $F_y = 0.0$ | `32 1E 00 00 00 00 03 [seq]` | $F_{z, L} = 50$, $F_{z, R} = 30$, flags = `0x03` |
+| **Shear at Tip**| $F_z = 2.0\text{ N}, F_y = 1.0\text{ N}$, Taxels $0..15 = 1.0\text{ N}$ | Same as Left | `14 14 0A FF 00 00 03 [seq]` | $F_{\text{shear}} = 10$, $w_A = 255$, $w_B = 0, w_C = 0$ |
+
+### Test Case 2: Transmission Rate Validation
+* Measure consecutive packet timestamps with a hardware USB analyzer or serial loopback script:
+  * Mean interval: **$10.0\text{ ms} \pm 0.5\text{ ms}$** ($100\text{ Hz}$).
+  * Frame length: **Exactly 20 bytes** every burst.
+
+---
+
+## 8. Host Implementation (delivered)
+
+Implemented in `unified_gui/haptic.py` and wired into the unified GUI:
+
+| Spec component | Code |
+|:--|:--|
+| `HapticPayloadSynthesizer` | `unified_gui.haptic.HapticPayloadSynthesizer` (synthesis rules §3, stale-data guard §6.1) |
+| `TueBinaryEncoder` | `unified_gui.haptic.TueBinaryEncoder` (20-byte envelope built with the shared `tue_usb.Frame`, SAE J1850 CRC-8) |
+| `Stm32HapticStreamer` | `unified_gui.haptic.Stm32HapticStreamer` (100 Hz regulated writer, thread-safe `update_sensors`, own `serial.Serial`) |
+
+The §7.1 acceptance vectors and the §4 CRC reference vector are asserted in
+`tests/test_haptic.py`; frame length is pinned at exactly 20 bytes. The five
+valves are visualised live by `unified_gui/valvemap.py`. Select the
+"STM32 Haptic Out" role in the Connection panel to start streaming at
+1 Mbaud / 100 Hz.
+

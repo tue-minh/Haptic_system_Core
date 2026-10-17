@@ -252,15 +252,17 @@ python -m unittest discover -s tests -t .
 | `unified_gui/theme.py` | Neutral light QSS theme; colour reserved for status LEDs, stop actions and the pressure map (Task 6.2) |
 | `unified_gui/motor.py` | `MotorWorker` thread: handshake, telemetry poll, jog/enable/abort/servo, error resilience (Tasks 2.2, 3.x, 7.1, 7.2) |
 | `unified_gui/sensors.py` | `SensorLink`: worker lifecycle, auto-detected device address, tare, health/drop counters (Tasks 2.3, 4.3, 7.3) |
+| `unified_gui/haptic.py` | Tactile → 5-valve synthesis (`HapticPayloadSynthesizer`), 20-byte TUE framing at CAN `0x300` (`TueBinaryEncoder`) and the 100 Hz USB CDC streamer (`Stm32HapticStreamer`) - the host bridge of `TODO_SEND_SENSOR_DATA_THROUGH_USB.md` |
 | `unified_gui/recording.py` | Master synchronized CSV + offline-compatible per-sensor CSV, batched flushing (Tasks 5.2-5.4) |
 | `unified_gui/taxelmap.py` | Live taxel map: 52 taxels at their (x, y) positions, coloured by Fz, CoP marker + shear arrow - the reference reader's view (Task 4.4) |
+| `unified_gui/valvemap.py` | Live 5-valve haptic output map: the five pneumatic chambers at their finger positions, coloured by commanded force, with the driving payload byte and frame age |
 | `unified_gui/plot3d.py` | 3D taxel point cloud, colormap/size mapping, CoP + force quiver, self-throttled (Tasks 4.4, 4.5) |
-| `unified_gui/panels/connection.py` | 3 COM ports, scan/refresh, LED states, collision guard, connect/disconnect (Phase 2) |
+| `unified_gui/panels/connection.py` | 4 link roles (motor, both sensors, haptic out), scan/refresh, LED states, collision guard, connect/disconnect (Phase 2) |
 | `unified_gui/panels/motor.py` | Stepper telemetry/enable/feed, jog pad (X/Y cross + Z column) + E-stop, gripper open/close/telemetry (Tasks 3.1-3.6) |
 | `unified_gui/panels/sensor.py` | 2D scrolling curves, direction radio filter, tare buttons, metrics grid (Tasks 4.1-4.3, 4.6) |
 | `unified_gui/panels/recording.py` | Record toggle, elapsed/rows/file display, output-dir quick picks (Tasks 5.1, 5.4) |
 | `unified_gui/main_window.py` | Layout, refresh loop, lifecycle wiring, safety watchdog (Tasks 6.1, 7.1, 7.2) |
-| `tests/` | Recording-format, worker, sensor-link and offscreen GUI smoke tests (Task 7.4) |
+| `tests/` | Recording-format, worker, sensor-link, haptic synthesis/streaming and offscreen GUI smoke tests (Task 7.4) |
 
 **Hardware note (corrected).** The sensor boards run at **921600** bps, not the
 1 000 000 the spec table above claims - that is what `paxini_usb_core.BAUDRATE`
@@ -297,10 +299,26 @@ above Z+), divided from the cross by a rule, with the E-stop spanning the full
 height to its right. `tests/test_gui_smoke.py::test_jog_pad_layout` pins these
 relative positions.
 
-**Tactile views.** The "Tactile surface" panel is tabbed. The default tab is the
-live taxel map (`unified_gui/taxelmap.py`) - the same pyqtgraph view as the
-reference reader, so it stays live at the full 30 FPS. The second tab is the
-Matplotlib 3D canvas (allowed by Task 4.4); it is CPU-rendered, so its redraw
-rate is user-adjustable (default 4 Hz), it can be paused, and it is only
-redrawn while its tab is actually visible. Installing `PyOpenGL` enables the
-optional GPU path reported by `unified_gui.deps`.
+**Tactile views.** The "Tactile surface & haptic output" panel is tabbed. The
+default tab is the live taxel map (`unified_gui/taxelmap.py`) - the same
+pyqtgraph view as the reference reader, so it stays live at the full 30 FPS. The
+second tab is the Matplotlib 3D canvas (allowed by Task 4.4); it is CPU-rendered,
+so its redraw rate is user-adjustable (default 4 Hz), it can be paused, and it is
+only redrawn while its tab is actually visible. Installing `PyOpenGL` enables the
+optional GPU path reported by `unified_gui.deps`. The third tab is the 5-valve
+haptic output map (`unified_gui/valvemap.py`).
+
+**Haptic output (STM32 bridge).** `unified_gui/haptic.py` implements the host
+side of `TODO_SEND_SENSOR_DATA_THROUGH_USB.md`: the dual 52-taxel jaws are
+compressed into one 8-byte payload mapping onto the slave thimble's five valves
+(A/B/C = shear steered tip→mid→base, D/E = bilateral clamp force), wrapped in the
+same 20-byte TUE binary frame used everywhere else on the link - only the CAN ID
+differs (`0x300`, the reserved user range, which is why the streamer writes raw
+frames rather than going through `TueUsbClient.transact`). It carries a fourth
+connection role ("STM32 Haptic Out", 1 Mbaud) and streams at 100 Hz; on Windows
+the process timer resolution is raised to 1 ms for the duration of the stream so
+`time.sleep` can actually hold a 10 ms period. The "Haptic valves (5)" tab draws
+the five chambers at their finger positions, coloured by the commanded force,
+each annotated with its payload byte and the age of the frame that drove it -
+and keeps previewing the mapping (marked "preview") even before the output link
+is connected.

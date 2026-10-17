@@ -185,6 +185,20 @@ class SensorLink:
             "drop_pct": (100.0 * self.timeouts / total) if total else 0.0,
         }
 
+    @property
+    def tare_active(self) -> bool:
+        """True while a tare is being captured or a non-zero baseline applies."""
+        w = self.worker
+        if w is None:
+            return False
+        if getattr(w, "_tare_left", 0) > 0:
+            return True
+        res = getattr(w, "tare_res", None)
+        tax = getattr(w, "tare_tax", None)
+        if res is None or tax is None:
+            return False
+        return bool(np.any(res != 0.0) or np.any(tax != 0.0))
+
     # -- tare (Phase 4.3) ---------------------------------------------------
     def request_tare(self, n_frames: int = 50) -> None:
         if self.worker is not None:
