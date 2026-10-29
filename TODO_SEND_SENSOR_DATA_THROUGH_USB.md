@@ -263,11 +263,18 @@ Implemented in `unified_gui/haptic.py` and wired into the unified GUI:
 |:--|:--|
 | `HapticPayloadSynthesizer` | `unified_gui.haptic.HapticPayloadSynthesizer` (synthesis rules §3, stale-data guard §6.1) |
 | `TueBinaryEncoder` | `unified_gui.haptic.TueBinaryEncoder` (20-byte envelope built with the shared `tue_usb.Frame`, SAE J1850 CRC-8) |
-| `Stm32HapticStreamer` | `unified_gui.haptic.Stm32HapticStreamer` (100 Hz regulated writer, thread-safe `update_sensors`, own `serial.Serial`) |
+| `Stm32HapticStreamer` | `unified_gui.haptic.Stm32HapticStreamer` (100 Hz regulated writer; borrows the motor link via `writer=`, thread-safe `update_sensors`) |
 
 The §7.1 acceptance vectors and the §4 CRC reference vector are asserted in
 `tests/test_haptic.py`; frame length is pinned at exactly 20 bytes. The five
-valves are visualised live by `unified_gui/valvemap.py`. Select the
-"STM32 Haptic Out" role in the Connection panel to start streaming at
-1 Mbaud / 100 Hz.
+valves are visualised live by `unified_gui/valvemap.py`.
+
+**Port topology (corrected).** The haptic frames share the STM32 master's
+single USB CDC port with the motor control traffic — there is **no** separate
+"haptic" COM port. `Stm32HapticStreamer` therefore takes a `writer=` callable
+(the motor worker's `write_frame`) and puts its 20-byte frames on that shared
+link under the same write lock the motor client uses; it only opens a port of
+its own when no writer is supplied (bench / unit-test use). Totals: **one**
+port for the STM32 (motor + haptic) plus **one per sensor**. The "Haptic
+output" panel starts and stops the stream automatically with the STM32 link.
 

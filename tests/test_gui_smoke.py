@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -54,6 +55,8 @@ class GuiSmokeTests(unittest.TestCase):
             self.assertEqual(window.links, {})
             self.assertFalse(window.recorder.active)
             self.assertIsNone(window.haptic)
+            self.assertIsNotNone(window.haptic_panel)
+            self.assertTrue(window.haptic_panel.enabled)   # streams once the link is up
             # panes exist for both fingers even before connection
             self.assertEqual(set(window.taxel_map.maps), {"L", "R"})
             self.assertEqual(set(window.view3d._panes), {"L", "R"})
@@ -66,12 +69,113 @@ class GuiSmokeTests(unittest.TestCase):
         finally:
             window.close()
 
-    def test_haptic_role_is_known(self):
+    def test_haptic_shares_the_stm32_port(self):
+        """One port for motor + haptic, two for the sensors - three in total."""
         from unified_gui.panels.connection import DEFAULT_BAUD, ROLES, ROLE_LABELS
 
-        self.assertIn("haptic", ROLES)
-        self.assertEqual(DEFAULT_BAUD["haptic"], 1_000_000)
-        self.assertIn("Haptic", ROLE_LABELS["haptic"])
+        self.assertEqual(ROLES, ("motor", "sensor_l", "sensor_r"))
+        self.assertNotIn("haptic", ROLES)          # no separate haptic port
+        self.assertIn("haptic", ROLE_LABELS["motor"].lower())
+        self.assertEqual(DEFAULT_BAUD["motor"], 1_000_000)
+
+    def test_haptic_ping_button_emits_signal(self):
+        from unified_gui.panels.haptic import HapticPanel
+
+        panel = HapticPanel()
+        fired = []
+        panel.ping_requested.connect(lambda: fired.append(True))
+
+        panel.update_status(None, streaming=False, motor_connected=True)
+        self.assertTrue(panel.btn_ping.isEnabled())
+        panel.btn_ping.click()
+        self.assertEqual(fired, [True])
+
+        panel.set_ping_result("ESP32 v1.0 RUNNING", True)
+        self.assertIn("RUNNING", panel.lbl_ping.text())
+
+        panel.update_status(None, streaming=False, motor_connected=False)
+        self.assertFalse(panel.btn_ping.isEnabled())
+
+    def test_haptic_panel_reports_stream_state(self):
+        from unified_gui.haptic import HapticSnapshot, TueBinaryEncoder
+        from unified_gui.panels.haptic import HapticPanel
+
+        panel = HapticPanel()
+        panel.update_status(None, streaming=False, motor_connected=False)
+        self.assertIn("waiting for the STM32", panel.lbl_state.text())
+
+        payload = bytes([20, 20, 10, 255, 0, 0, 0x03, 0])
+        snap = HapticSnapshot.from_payload(
+            payload, 1.0, 0.01, frame=TueBinaryEncoder().encode(payload),
+            sent=42, rate_hz=99.5)
+        panel.update_status(snap, streaming=True, motor_connected=True)
+        self.assertIn("99.5", panel.lbl_state.text())
+        self.assertIn("42", panel.lbl_state.text())
+        self.assertIn("0x300", panel.lbl_detail.text())
+        self.assertIn("L-contact", panel.lbl_detail.text())
+
+        panel.chk_enable.setChecked(False)
+        panel.update_status(snap, streaming=False, motor_connected=True)
+        self.assertEqual(panel.lbl_state.text(), "off")
+
+    def test_haptic_stream_starts_on_the_motor_link(self):
+        """End-to-end topology: 100 Hz haptic frames go out over the motor port."""
+        from unified_gui.main_window import MainWindow
+        from unified_gui.motor import MotorSnapshot
+
+        frames = []
+
+        class FakeMotor:
+            port = "COM9"
+            has_port = True
+
+            def snapshot(self):
+                return MotorSnapshot(connected=True, streaming=True,
+                                     board="HW 1.1", firmware="1.0")
+
+            def write_frame(self, frame):
+                frames.append(bytes(frame))
+                return len(frame)
+
+            # lifecycle no-ops so closeEvent can tear down
+            def shutdown(self):
+                pass
+
+            def join(self, timeout=None):
+                pass
+
+            def close_client(self):
+                pass
+
+        window = MainWindow()
+        try:
+            window.motor = FakeMotor()
+            window._sync_haptic(window.motor.snapshot())
+            self.assertIsNotNone(window.haptic)
+            self.assertTrue(window.haptic.shared)   # borrowing, not opening a port
+            self.assertTrue(window.motor.has_port)
+
+            deadline = time.time() + 2.0
+            while time.time() < deadline and len(frames) < 5:
+                window._on_tick()
+                time.sleep(0.01)
+            self.assertGreaterEqual(len(frames), 5)
+            self.assertTrue(all(len(f) == 20 for f in frames),
+                            "each haptic frame is the fixed 20-byte envelope")
+            self.assertIn("0x300", window.haptic_panel.lbl_detail.text().lower())
+        finally:
+            window.close()
+
+        # disabling the switch stops the stream
+        window2 = MainWindow()
+        try:
+            window2.motor = FakeMotor()
+            window2._sync_haptic(window2.motor.snapshot())
+            self.assertIsNotNone(window2.haptic)
+            window2.haptic_panel.chk_enable.setChecked(False)
+            self.assertIsNone(window2.haptic)
+        finally:
+            window2.close()
 
     def test_valve_map_plots_five_valves(self):
         from unified_gui.haptic import HapticSnapshot, TueBinaryEncoder

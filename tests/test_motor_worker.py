@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 import unittest
 from types import SimpleNamespace
@@ -16,9 +17,11 @@ from unified_gui.motor import (  # noqa: E402
     ACCEL_MIN,
     VEL_MAX,
     VEL_MIN,
+    LockedSerial,
     MotorWorker,
     clamp,
 )
+from tue_usb import HapticPingInfo, HapticUartDiag  # noqa: E402  (path added by unified_gui._paths)
 
 
 def _info():
@@ -47,11 +50,12 @@ def _feedback(pos: int = 55):
 class FakeUsbClient:
     """Records the calls it receives and answers like a healthy binary board."""
 
-    def __init__(self, *, enabled: bool = False, fail_polls: int = 0):
+    def __init__(self, *, enabled: bool = False, fail_polls: int = 0, fail_ping: bool = False):
         self.calls = []
         self.closed = False
         self._enabled = enabled
         self._fail_polls = fail_polls
+        self._fail_ping = fail_ping
         self._pos = (1.5, -2.0)
         self._z = 3.25
 
@@ -104,6 +108,18 @@ class FakeUsbClient:
 
     def servo_set_pos(self, sid, pos, speed=None, accel=None):
         self.calls.append(("servo_set_pos", int(pos), speed, accel))
+
+    def haptic_ping(self, token=0):
+        self.calls.append(("haptic_ping", token))
+        if self._fail_ping:
+            raise TimeoutError("no ESP32 reply")
+        return HapticPingInfo(token=token, protocol=1, fw_major=1, fw_minor=0,
+                              state=1, frame_counter=7, errors=0, uptime_s=42)
+
+    def haptic_uart_diag(self):
+        self.calls.append(("haptic_uart_diag",))
+        return HapticUartDiag(flags=0x03, rx_errors=0, rx_bytes=0,
+                              last_ping_rx_bytes=0, tx_fail=0, timeouts=1, replies=0)
 
     def disconnect(self):
         self.closed = True
@@ -164,7 +180,7 @@ class MotorWorkerTests(unittest.TestCase):
             self.assertAlmostEqual(jog[2], 0.0)
             self.assertAlmostEqual(jog[3], 300.0)
             worker.jog_stop()
-            self.assertTrue(wait_for(lambda: any(c[0] == "step_stop" for c in client.calls)))
+            self.assertTrue(wait_for(lambda: any(c[0] == "step_abort" for c in client.calls)))
         finally:
             worker.shutdown()
             worker.join(timeout=2)
@@ -176,6 +192,38 @@ class MotorWorkerTests(unittest.TestCase):
             time.sleep(0.3)
             self.assertFalse(any(c[0] == "step_jog_xy" for c in client.calls))
             self.assertIn("disabled", worker.snapshot().last_warning)
+        finally:
+            worker.shutdown()
+            worker.join(timeout=2)
+
+    def test_haptic_ping_updates_snapshot(self):
+        worker, client = self._worker()
+        try:
+            worker.ping_haptic(token=0x5A)
+            self.assertTrue(wait_for(
+                lambda: not worker.snapshot().haptic_ping_pending
+                and bool(worker.snapshot().haptic_ping)))
+            snap = worker.snapshot()
+            self.assertTrue(snap.haptic_ping_ok)
+            self.assertIn("ESP32", snap.haptic_ping)
+            self.assertIn("RUNNING", snap.haptic_ping)
+            self.assertIn(("haptic_ping", 0x5A), client.calls)
+        finally:
+            worker.shutdown()
+            worker.join(timeout=2)
+
+    def test_haptic_ping_failure_keeps_the_stm32_link_alive(self):
+        worker, _client = self._worker(fail_ping=True)
+        try:
+            worker.ping_haptic()
+            self.assertTrue(wait_for(
+                lambda: not worker.snapshot().haptic_ping_pending
+                and bool(worker.snapshot().haptic_ping)))
+            snap = worker.snapshot()
+            self.assertFalse(snap.haptic_ping_ok)
+            self.assertIn("failed", snap.haptic_ping)
+            self.assertIn("STM32 UART", snap.haptic_ping)
+            self.assertTrue(snap.connected, "a missing ESP32 must not drop the board")
         finally:
             worker.shutdown()
             worker.join(timeout=2)
@@ -217,6 +265,114 @@ class MotorWorkerTests(unittest.TestCase):
         self.assertEqual(clamp(0.0, VEL_MIN, VEL_MAX), VEL_MIN)
         self.assertEqual(clamp(1e6, ACCEL_MIN, ACCEL_MAX), ACCEL_MAX)
         self.assertEqual(clamp(25.0, VEL_MIN, VEL_MAX), 25.0)
+
+
+class _RecordingPort:
+    """Serial stand-in that counts how many writes are in flight at once."""
+
+    def __init__(self, delay: float = 0.002):
+        self.delay = delay
+        self.data = []
+        self.active = 0
+        self.max_active = 0
+        self.closed = False
+        self.flushes = 0
+        self.resets = 0
+        self._guard = threading.Lock()
+
+    def write(self, data):
+        with self._guard:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        time.sleep(self.delay)
+        with self._guard:
+            self.data.append(bytes(data))
+            self.active -= 1
+        return len(data)
+
+    def flush(self):
+        self.flushes += 1
+
+    def reset_input_buffer(self):
+        self.resets += 1
+
+    def read(self, size=1):
+        return b""
+
+    @property
+    def in_waiting(self):
+        return 0
+
+    def close(self):
+        self.closed = True
+
+
+class SharedTransportTests(unittest.TestCase):
+    """Motor control and haptic output share the one STM32 serial link."""
+
+    def test_locked_serial_never_overlaps_writes(self):
+        port = _RecordingPort()
+        locked = LockedSerial(port, threading.Lock())
+        threads = [threading.Thread(target=locked.write, args=(bytes([i]),))
+                   for i in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(port.max_active, 1, "writes must be serialised frame-by-frame")
+        self.assertEqual(len(port.data), 6)
+
+    def test_locked_serial_forwards_reads_and_buffer_calls(self):
+        port = _RecordingPort()
+        locked = LockedSerial(port, threading.Lock())
+        self.assertEqual(locked.read(1), b"")
+        self.assertEqual(locked.in_waiting, 0)
+        locked.reset_input_buffer()
+        locked.flush()
+        self.assertEqual((port.resets, port.flushes), (1, 1))
+        locked.close()
+        self.assertTrue(port.closed)
+
+    def test_write_frame_without_an_open_port_is_a_no_op(self):
+        worker = MotorWorker("COM_TEST", client_factory=lambda *a, **k: object())
+        self.assertFalse(worker.has_port)
+        self.assertEqual(worker.write_frame(b"\x00" * 20), 0)
+
+    def test_write_frame_uses_the_shared_handle(self):
+        worker = MotorWorker("COM_TEST", client_factory=lambda *a, **k: object())
+        port = _RecordingPort(delay=0)
+        worker._raw_serial = port
+        self.assertTrue(worker.has_port)
+        self.assertEqual(worker.write_frame(b"\xAA" * 20), 20)
+        self.assertEqual(port.data, [b"\xAA" * 20])
+
+    def test_write_frame_rejects_a_short_write(self):
+        class ShortPort:
+            def write(self, data):
+                return len(data) - 3
+
+        worker = MotorWorker("COM_TEST", client_factory=lambda *a, **k: object())
+        worker._raw_serial = ShortPort()
+        self.assertEqual(worker.write_frame(b"\xAA" * 20), 0)
+
+    def test_close_client_releases_the_port(self):
+        class Client:
+            def __init__(self):
+                self.disconnected = False
+
+            def disconnect(self):
+                self.disconnected = True
+
+        client = Client()
+        worker = MotorWorker("COM_TEST", client_factory=lambda *a, **k: client)
+        worker._client = client
+        worker._raw_serial = object()
+        worker.close_client()
+        # TueUsbClient exposes disconnect(), not close(); missing it would leak
+        # the COM port and block the next connect.
+        self.assertTrue(client.disconnected)
+        self.assertFalse(worker.has_port)
+        self.assertIsNone(worker._client)
 
 
 if __name__ == "__main__":

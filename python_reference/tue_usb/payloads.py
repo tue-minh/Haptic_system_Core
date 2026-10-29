@@ -159,6 +159,81 @@ class ServoFeedback:
 
 
 # ==============================================================================
+# Haptic Slave Ping Data Model (0x301)
+# ==============================================================================
+
+HAPTIC_STATE_NAMES = {0: "IDLE", 1: "RUNNING", 2: "ERROR"}
+
+
+@dataclass
+class HapticPingInfo:
+    """Status returned by the ESP32 haptic slave over the 115200 UART link."""
+    token: int
+    protocol: int
+    fw_major: int
+    fw_minor: int
+    state: int
+    frame_counter: int
+    errors: int
+    uptime_s: int
+
+    @property
+    def version_string(self) -> str:
+        return f"v{self.fw_major}.{self.fw_minor}"
+
+    @property
+    def state_name(self) -> str:
+        return HAPTIC_STATE_NAMES.get(self.state, f"UNKNOWN({self.state})")
+
+    def __str__(self) -> str:
+        return (
+            f"ESP32 {self.version_string} {self.state_name}, "
+            f"uptime {self.uptime_s}s, frame {self.frame_counter}, "
+            f"errors {self.errors}"
+        )
+
+
+@dataclass
+class HapticUartDiag:
+    """STM32-local USART2 link diagnostics (CAN 0x302)."""
+    flags: int
+    rx_errors: int
+    rx_bytes: int
+    last_ping_rx_bytes: int
+    tx_fail: int
+    timeouts: int
+    replies: int
+
+    @property
+    def initialized(self) -> bool:
+        return bool(self.flags & 0x01)
+
+    @property
+    def rx_armed(self) -> bool:
+        return bool(self.flags & 0x02)
+
+    @property
+    def tx_busy(self) -> bool:
+        return bool(self.flags & 0x04)
+
+    @property
+    def last_tx_ok(self) -> bool:
+        return bool(self.flags & 0x08)
+
+    @property
+    def last_ping_saw_bytes(self) -> bool:
+        return bool(self.flags & 0x10)
+
+    def __str__(self) -> str:
+        return (
+            f"STM32 UART init={int(self.initialized)} rx_armed={int(self.rx_armed)} "
+            f"tx_ok={int(self.last_tx_ok)} rx={self.rx_bytes}B "
+            f"err={self.rx_errors} last_ping_rx={self.last_ping_rx_bytes}B "
+            f"tx_fail={self.tx_fail} timeouts={self.timeouts} replies={self.replies}"
+        )
+
+
+# ==============================================================================
 # Encoders (Host -> Payload Bytes)
 # ==============================================================================
 
@@ -305,6 +380,12 @@ class Encoders:
     @staticmethod
     def servo_reset(servo_id: int) -> bytes:
         return struct.pack("<B", servo_id & 0xFF)
+
+    # --- Haptic slave ping (0x301) ---
+    @staticmethod
+    def haptic_ping(token: int = 0) -> bytes:
+        """8-byte ping request: token in byte 0, remaining bytes zero."""
+        return struct.pack("<B7x", token & 0xFF)
 
 
 # ==============================================================================
@@ -539,3 +620,38 @@ class Decoders:
         if len(payload) < 2:
             return (0, 0)
         return struct.unpack("<BB", payload[:2])
+
+    # --- Haptic slave ping (0x301) ---
+    @staticmethod
+    def haptic_ping(payload: bytes) -> HapticPingInfo:
+        if len(payload) < 8:
+            raise ValueError("HAPTIC_PING payload must be 8 bytes")
+        token, proto, maj, min_, state, counter, errs, uptime = struct.unpack(
+            "<BBBBBBBB", payload[:8])
+        return HapticPingInfo(
+            token=token,
+            protocol=proto,
+            fw_major=maj,
+            fw_minor=min_,
+            state=state,
+            frame_counter=counter,
+            errors=errs,
+            uptime_s=uptime,
+        )
+
+    # --- Haptic UART diagnostics (0x302) ---
+    @staticmethod
+    def haptic_uart_diag(payload: bytes) -> HapticUartDiag:
+        if len(payload) < 8:
+            raise ValueError("HAPTIC_DIAG payload must be 8 bytes")
+        flags, errs, lo, hi, last_rx, tx_fail, timeouts, replies = struct.unpack(
+            "<BBBBBBBB", payload[:8])
+        return HapticUartDiag(
+            flags=flags,
+            rx_errors=errs,
+            rx_bytes=lo | (hi << 8),
+            last_ping_rx_bytes=last_rx,
+            tx_fail=tx_fail,
+            timeouts=timeouts,
+            replies=replies,
+        )

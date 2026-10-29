@@ -2,12 +2,18 @@
 
 Layout
 ------
-Left column  : Connection, Stepper Control, Gripper, Data Recording.
-Right column : force-history plot + live metrics grid, above the 3D tactile view.
+Left column  : Connection, Stepper Control, Gripper, Haptic output, Data Recording.
+Right column : force-history plot and metrics grid, above the tactile surface /
+               haptic-valve tabs.
 Bottom       : rolling log.
 
 All hardware access happens on worker threads; this window only submits commands
 and polls telemetry snapshots from a single Qt timer.
+
+Port topology: the STM32's single COM port carries **both** motor control and
+the 100 Hz haptic frames, so the haptic streamer borrows that link
+(``MotorWorker.write_frame``) instead of opening a port.  The two tactile
+sensors each have their own port.
 """
 from __future__ import annotations
 
@@ -32,7 +38,8 @@ from .sensors import SensorLink, STATE_CONNECTING, STATE_ERROR, STATE_STREAMING
 from .plot3d import Tactile3DView
 from .taxelmap import TaxelMapView
 from .valvemap import ValveMapView
-from .panels.connection import ConnectionPanel, ROLE_LABELS
+from .panels.connection import ConnectionPanel, ROLE_LABELS, ROLES
+from .panels.haptic import HapticPanel
 from .panels.motor import GripperPanel, StepperPanel
 from .panels.recording import RecordingPanel
 from .panels.sensor import SensorMonitorPanel
@@ -101,12 +108,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.stepper = StepperPanel(self.post_log)
         self.gripper = GripperPanel(self.post_log)
+        self.haptic_panel = HapticPanel()
+        self.haptic_panel.enabled_changed.connect(self._on_haptic_toggled)
+        self.haptic_panel.ping_requested.connect(self._on_ping_esp32)
         self.record_panel = RecordingPanel(DEFAULT_OUTPUT_DIR)
         self.record_panel.start_requested.connect(self._start_recording)
         self.record_panel.stop_requested.connect(self._stop_recording)
         self.record_panel.output_dir_changed.connect(self.recorder.set_output_dir)
 
-        for widget in (self.connection, self.stepper, self.gripper, self.record_panel):
+        for widget in (self.connection, self.stepper, self.gripper,
+                       self.haptic_panel, self.record_panel):
             left.addWidget(widget)
         left.addStretch(1)
 
@@ -215,8 +226,6 @@ class MainWindow(QtWidgets.QMainWindow):
         baud = self.connection.selected_baud(role)
         if role == "motor":
             self._connect_motor(port, baud)
-        elif role == "haptic":
-            self._connect_haptic(port, baud)
         else:
             self._connect_sensor("L" if role == "sensor_l" else "R", port, baud)
 
@@ -241,31 +250,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self._rebind_sensor_views()
         self.post_log(f"connecting {link.label} sensor on {port} @ {baud} baud")
 
-    def _connect_haptic(self, port: str, baud: int) -> None:
-        if self.haptic is not None:
-            return
-        streamer = Stm32HapticStreamer(
-            port, baudrate=baud, log=self.post_log, clock=core.now)
-        self.haptic = streamer
-        streamer.start()
-        self.connection.set_state("haptic", "connecting", f"{port} @ {baud}")
-        self.post_log(f"connecting haptic stream on {port} @ {baud} baud (CAN 0x300, 100 Hz)")
-
     def _connect_all(self) -> None:
-        for role in ("motor", "sensor_l", "sensor_r", "haptic"):
+        for role in ROLES:
             if not self.connection.is_connected(role):
                 self._connect_role(role)
 
     def _disconnect_role(self, role: str) -> None:
         if role == "motor":
             self._disconnect_motor()
-        elif role == "haptic":
-            self._disconnect_haptic()
         else:
             tag = "L" if role == "sensor_l" else "R"
             self._disconnect_sensor(tag)
 
     def _disconnect_motor(self) -> None:
+        # Stop the haptic writer before the port it borrows goes away.
+        self._stop_haptic("STM32 link disconnected")
         worker, self.motor = self.motor, None
         if worker is not None:
             worker.shutdown()
@@ -274,15 +273,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stepper.bind(None)
         self.gripper.bind(None)
         self.connection.set_state("motor", "off", "-")
-        self.post_log("motor board disconnected")
-
-    def _disconnect_haptic(self) -> None:
-        streamer, self.haptic = self.haptic, None
-        if streamer is not None:
-            streamer.shutdown()
-            streamer.join(timeout=1.5)
-        self.connection.set_state("haptic", "off", "-")
-        self.post_log("haptic stream disconnected")
+        self.post_log("STM32 link (motor + haptic) disconnected")
 
     def _disconnect_sensor(self, tag: str) -> None:
         if self.recorder.active:
@@ -307,7 +298,6 @@ class MainWindow(QtWidgets.QMainWindow):
             role = "sensor_l" if tag == "L" else "sensor_r"
             self.connection.set_state(role, "off", "-")
         self._disconnect_motor()
-        self._disconnect_haptic()
         self._rebind_sensor_views()
 
     def _rebind_sensor_views(self) -> None:
@@ -373,6 +363,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.view3d.update_readings(readings)
 
         self._update_haptic(readings)
+        self._sync_haptic(snap)
 
         if self._tick % 15 == 0:
             self._update_recording_status()
@@ -380,6 +371,66 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_status_bar(snap)
 
     # --------------------------------------------------------------- haptic
+    def _on_haptic_toggled(self, _enabled: bool) -> None:
+        self._sync_haptic(self.motor.snapshot() if self.motor is not None else None)
+
+    def _sync_haptic(self, snap) -> None:
+        """Start/stop the haptic stream so it follows the STM32 link.
+
+        The haptic frames ride the motor port, so the streamer may only run
+        while that link is up; it borrows ``MotorWorker.write_frame`` rather
+        than opening a port of its own.
+        """
+        motor_ready = (
+            snap is not None and snap.connected
+            and self.motor is not None and self.motor.has_port
+        )
+        want = self.haptic_panel.enabled and motor_ready
+
+        if want and self.haptic is None:
+            streamer = Stm32HapticStreamer(
+                self.motor.port, log=self.post_log,
+                writer=self.motor.write_frame, clock=core.now)
+            self.haptic = streamer
+            streamer.start()
+            self.post_log(
+                f"haptic output started on the STM32 link {self.motor.port} "
+                "(CAN 0x300 @ 100 Hz, shared with motor control)")
+        elif not want and self.haptic is not None:
+            reason = ("disabled" if not self.haptic_panel.enabled
+                      else "STM32 link not ready")
+            self._stop_haptic(reason)
+
+        self.haptic_panel.update_status(
+            self.haptic.snapshot() if self.haptic is not None else None,
+            streaming=self.haptic is not None,
+            motor_connected=motor_ready,
+        )
+
+        if snap is not None:
+            if snap.haptic_ping_pending:
+                self.haptic_panel.set_ping_result(
+                    "Pinging ESP32 over ASCII UART 115200…", None)
+            elif snap.haptic_ping:
+                self.haptic_panel.set_ping_result(
+                    snap.haptic_ping, snap.haptic_ping_ok)
+
+    def _on_ping_esp32(self) -> None:
+        """Ping the ESP32 slave through the STM32 UART bridge (CAN 0x301)."""
+        motor = self.motor
+        if motor is None or not motor.has_port:
+            self.haptic_panel.set_ping_result(
+                "ESP32 ping: STM32 link is not connected", False)
+            return
+        motor.ping_haptic()
+
+    def _stop_haptic(self, reason: str) -> None:
+        streamer, self.haptic = self.haptic, None
+        if streamer is not None:
+            streamer.shutdown()
+            streamer.join(timeout=1.5)
+            self.post_log(f"haptic output stopped ({reason})")
+
     @staticmethod
     def _haptic_side(reading):
         """Flatten one sensor snapshot into the synthesizer's input contract."""
@@ -438,9 +489,10 @@ class MainWindow(QtWidgets.QMainWindow):
             if snap.error:
                 self.connection.set_state("motor", "error", snap.error[:40])
             elif snap.connected:
-                self.connection.set_state(
-                    "motor", "ready",
-                    f"{snap.board} fw{snap.firmware} | {snap.poll_hz:4.1f} Hz")
+                text = f"{snap.board} fw{snap.firmware} | {snap.poll_hz:4.1f} Hz"
+                if self.haptic is not None:
+                    text += f" | haptic {self.haptic.snapshot().rate_hz:4.0f} Hz"
+                self.connection.set_state("motor", "ready", text)
             elif snap.connecting:
                 self.connection.set_state("motor", "connecting", self.motor.port)
             else:
@@ -463,20 +515,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.connection.set_state(role, "error", link.error[:40])
             else:
                 self.connection.set_state(role, "off", "-")
-
-        # haptic output link
-        if self.haptic is not None:
-            hs = self.haptic.snapshot()
-            if hs.error:
-                self.connection.set_state("haptic", "error", hs.error[:40])
-            elif hs.state == "streaming" and hs.sent:
-                self.connection.set_state(
-                    "haptic", "ready",
-                    f"CAN 0x300 | {hs.rate_hz:4.1f} Hz | {hs.sent} frames")
-            elif hs.state == "streaming":
-                self.connection.set_state("haptic", "connecting", self.haptic.port)
-            else:
-                self.connection.set_state("haptic", "off", "-")
 
     def _update_status_bar(self, snap) -> None:
         parts = []
@@ -520,10 +558,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if link is not None:
                 link.disconnect(wait=True)
         self.stepper.bind(None)
-        if self.haptic is not None:
-            self.haptic.shutdown()
-            self.haptic.join(timeout=1.5)
-            self.haptic = None
+        self._stop_haptic("shutdown")
         if self.motor is not None:
             self.motor.shutdown()
             self.motor.join(timeout=1.5)

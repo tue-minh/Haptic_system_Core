@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Launcher for the Unified Motor Control & Dual PaXini Tactile GUI.
 
 Run:  python run_unified_gui.py

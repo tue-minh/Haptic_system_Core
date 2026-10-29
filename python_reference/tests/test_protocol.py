@@ -51,8 +51,14 @@ class TestProtocol(unittest.TestCase):
         self.assertTrue(is_reserved_can_id(0x3ABC))
         self.assertTrue(is_reserved_can_id(0x30000000))
 
-        # Check that none of the defined CanId enum values are reserved
+        # Check that none of the defined CanId enum values are reserved,
+        # except the user-range haptic bridge IDs (0x300 / 0x301 / 0x302).
+        self.assertEqual(CanId.HAPTIC_TELEMETRY, 0x300)
+        self.assertEqual(CanId.HAPTIC_PING, 0x301)
+        self.assertEqual(CanId.HAPTIC_DIAG, 0x302)
         for cid in CanId:
+            if cid in (CanId.HAPTIC_TELEMETRY, CanId.HAPTIC_PING, CanId.HAPTIC_DIAG):
+                continue
             self.assertFalse(
                 is_reserved_can_id(cid.value),
                 f"CanId {cid.name} (0x{cid.value:X}) collides with reserved range!"
@@ -201,6 +207,52 @@ class TestProtocol(unittest.TestCase):
             self.assertEqual(fb.dynamics.servo_id, 1)
             self.assertEqual(fb.dynamics.position, 1500)
             self.assertAlmostEqual(fb.health.voltage_v, 12.0, places=1)
+
+
+    def test_07_haptic_ping_roundtrip(self):
+        """CAN 0x301 ping request/reply payload and mock transaction."""
+        raw = Encoders.haptic_ping(0x5A)
+        self.assertEqual(len(raw), 8)
+        self.assertEqual(raw[0], 0x5A)
+        self.assertEqual(raw[1:], b"\x00" * 7)
+
+        info = Decoders.haptic_ping(bytes([0x5A, 1, 1, 0, 1, 7, 2, 42]))
+        self.assertEqual(info.token, 0x5A)
+        self.assertEqual(info.protocol, 1)
+        self.assertEqual(info.version_string, "v1.0")
+        self.assertEqual(info.state_name, "RUNNING")
+        self.assertEqual(info.frame_counter, 7)
+        self.assertEqual(info.errors, 2)
+        self.assertEqual(info.uptime_s, 42)
+
+        with TueUsbClient(mock=True) as client:
+            pong = client.haptic_ping(0x5A)
+            self.assertEqual(pong.token, 0x5A)
+            self.assertEqual(pong.state_name, "RUNNING")
+            self.assertEqual(pong.version_string, "v1.0")
+
+        with self.assertRaises(ValueError):
+            Decoders.haptic_ping(b"\x00\x01")
+
+
+    def test_08_haptic_uart_diag(self):
+        """CAN 0x302 diagnostics payload and mock transaction."""
+        diag = Decoders.haptic_uart_diag(bytes([0x0B, 2, 0x34, 0x12, 20, 1, 2, 3]))
+        self.assertTrue(diag.initialized)
+        self.assertTrue(diag.rx_armed)
+        self.assertTrue(diag.last_tx_ok)
+        self.assertEqual(diag.rx_errors, 2)
+        self.assertEqual(diag.rx_bytes, 0x1234)
+        self.assertEqual(diag.last_ping_rx_bytes, 20)
+        self.assertEqual(diag.tx_fail, 1)
+        self.assertEqual(diag.timeouts, 2)
+        self.assertEqual(diag.replies, 3)
+        self.assertIn("STM32 UART", str(diag))
+
+        with TueUsbClient(mock=True) as client:
+            mock_diag = client.haptic_uart_diag()
+            self.assertTrue(mock_diag.rx_armed)
+            self.assertTrue(mock_diag.last_tx_ok)
 
 
 if __name__ == "__main__":

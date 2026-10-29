@@ -269,8 +269,17 @@ python -m unittest discover -s tests -t .
 (and therefore the working reference reader) opens them at. `SENSOR_BAUDRATE` now
 reads `core.BAUDRATE` directly, so the GUI cannot drift from it again; the value
 stays editable per role in the Connection panel. The motor board is left at
-1 000 000 bps per the spec (also editable) - `tue_acsi.AcsiClient` itself defaults
+1 000 000 bps per the spec (also editable) - `tue_usb.TueUsbClient` itself defaults
 to 115200, so check this first if the stepper link will not come up.
+
+**Port topology.** Three COM ports in total: **one** for the STM32 master board
+and **one per tactile sensor**. The STM32 port carries both motor control and
+the 100 Hz haptic output frames — the haptic streamer borrows
+`MotorWorker.write_frame` (which writes under the same lock as the motor client)
+instead of opening a port, so the two protocols are multiplexed frame-by-frame
+on one cable. The "Haptic output" panel follows the STM32 link automatically.
+Start/stop is per-session; the streamer only opens its own port when no writer
+is supplied (bench use).
 
 **Device address.** The sensor bus address is auto-detected on connect: the
 calibration request is sent to every candidate address (`0x01`-`0x08`) and the first

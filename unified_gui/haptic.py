@@ -412,6 +412,14 @@ class Stm32HapticStreamer(threading.Thread):
     thread re-synthesises and writes a frame every ``period`` seconds so the
     USB CDC link carries a deterministic 100 Hz stream regardless of how fast
     the sensors or the GUI tick (TODO §5 Step 3).
+
+    **Where the frames go.** In the real system the haptic frames share the
+    STM32's single COM port with the motor control traffic, so the GUI passes
+    ``writer=`` (the motor worker's ``write_frame``) and this thread borrows that
+    link instead of opening a port of its own.  ``writer`` receives the finished
+    frame and must return the number of bytes written (0 when the link is down).
+    Omitting ``writer`` keeps the standalone behaviour - the streamer opens (and
+    owns) ``port`` itself, which is what the unit tests and a bench setup use.
     """
 
     MAX_CONSECUTIVE_ERRORS = 50
@@ -426,6 +434,7 @@ class Stm32HapticStreamer(threading.Thread):
         serial_timeout: float = 0.05,
         clock: Optional[Callable[[], float]] = None,
         shear_axis: str = "Y",
+        writer: Optional[Callable[[bytes], int]] = None,
     ) -> None:
         super().__init__(daemon=True, name=f"Haptic-{port}")
         self.port = port
@@ -434,6 +443,8 @@ class Stm32HapticStreamer(threading.Thread):
         self._timeout = float(serial_timeout)
         self._log_fn = log or (lambda _m: None)
         self._clock = clock or time.perf_counter
+        # Borrowed transport (shared STM32 link) - None means "open our own".
+        self._writer = writer
 
         self.synthesizer = synthesizer or HapticPayloadSynthesizer(shear_axis=shear_axis)
         self.encoder = TueBinaryEncoder()
@@ -465,6 +476,15 @@ class Stm32HapticStreamer(threading.Thread):
 
     def open(self) -> bool:
         """Open the serial port (idempotent). Returns ``True`` on success."""
+        if self._writer is not None:
+            # Borrowed transport: the STM32 port belongs to the motor worker,
+            # which is also carrying the motor control frames. Nothing to open.
+            self._state = "streaming"
+            self._error = ""
+            if not self._timer_raised:
+                self._timer_raised = raise_timer_resolution()
+            self.log(f"using the shared STM32 link @ {HAPTIC_RATE_HZ:.0f} Hz")
+            return True
         if self._ser is not None:
             return True
         if serial is None:
@@ -506,7 +526,12 @@ class Stm32HapticStreamer(threading.Thread):
         self._stop.set()
 
     def is_open(self) -> bool:
-        return self._ser is not None
+        return self._writer is not None or self._ser is not None
+
+    @property
+    def shared(self) -> bool:
+        """True when writing through the motor worker's STM32 link."""
+        return self._writer is not None
 
     # -- input --------------------------------------------------------------
     def update_sensors(
@@ -604,13 +629,24 @@ class Stm32HapticStreamer(threading.Thread):
         payload = synth.synthesize(left, right, slip_alert=slip, tare_active=tare, now=clock_now)
         frame = self.encoder.encode(payload)
 
-        ser = self._ser
-        if ser is None:
-            return
         try:
-            ser.write(frame)
+            if self._writer is not None:
+                written = self._writer(frame)
+            else:
+                ser = self._ser
+                if ser is None:
+                    return
+                written = ser.write(frame)
         except Exception as exc:
             self._on_write_error(exc)
+            return
+        if not written:
+            # Shared link not open yet: nothing sent, and not an error.
+            return
+        if written != len(frame):
+            # A truncated frame would desynchronise the STM32 byte parser.
+            self._on_write_error(
+                OSError(f"short frame write: {written}/{len(frame)} bytes"))
             return
 
         self._consecutive = 0

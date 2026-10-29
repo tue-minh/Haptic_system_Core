@@ -227,6 +227,71 @@ class StreamerTests(unittest.TestCase):
         self.assertEqual(streamer.state, "error")
         self.assertIn("open failed", streamer.error)
 
+    def test_shared_link_uses_the_writer_instead_of_a_port(self):
+        """The real topology: haptic frames ride the motor worker's STM32 port."""
+        frames = []
+
+        def writer(data):
+            frames.append(bytes(data))
+            return len(data)
+
+        opened = []
+        orig = h.serial.Serial
+        h.serial.Serial = lambda *a, **k: opened.append(a) or object()
+        left, right = _side(fz=5.0, taxels=0.5), _side(fz=3.0, taxels=0.5)
+        try:
+            streamer = h.Stm32HapticStreamer("COM_SHARED", period=0.005, writer=writer)
+            streamer.update_sensors(left, right)
+            streamer.start()
+            deadline = time.time() + 0.4
+            while time.time() < deadline:
+                streamer.update_sensors(left, right)
+                time.sleep(0.02)
+            streamer.shutdown()
+            streamer.join(timeout=2)
+        finally:
+            h.serial.Serial = orig
+
+        self.assertTrue(streamer.shared)
+        self.assertEqual(opened, [], "shared mode must not open its own port")
+        self.assertGreaterEqual(len(frames), 10)
+        self.assertTrue(all(len(f) == h.FRAME_LEN for f in frames))
+        decoded = Frame.from_bytes(frames[-1])
+        self.assertEqual(int(decoded.can_id), h.CAN_ID)
+        self.assertEqual(decoded.payload[0], 50)   # Fz_Left 5.0 N
+        self.assertGreaterEqual(streamer.snapshot().sent, 10)
+
+    def test_shared_writer_returning_zero_counts_as_not_sent(self):
+        """write_frame() returns 0 while the port is closed; that is not an error."""
+        streamer = h.Stm32HapticStreamer("COM_SHARED", period=0.005, writer=lambda _f: 0)
+        streamer.update_sensors(_side(fz=1.0, taxels=0.5), _side())
+        streamer.start()
+        try:
+            time.sleep(0.2)
+        finally:
+            streamer.shutdown()
+            streamer.join(timeout=2)
+        snap = streamer.snapshot()
+        self.assertEqual(snap.sent, 0)
+        self.assertEqual(snap.errors, 0)
+        self.assertEqual(streamer.state, "stopped")
+
+
+    def test_short_frame_write_counts_as_error(self):
+        """A truncated frame must be reported, never silently accepted."""
+        streamer = h.Stm32HapticStreamer("COM_SHORT", period=0.005, writer=lambda _f: 7)
+        streamer.update_sensors(_side(fz=1.0, taxels=0.5), _side())
+        streamer.start()
+        try:
+            time.sleep(0.12)
+        finally:
+            streamer.shutdown()
+            streamer.join(timeout=2)
+        snap = streamer.snapshot()
+        self.assertEqual(snap.sent, 0)
+        self.assertGreater(snap.errors, 0)
+        self.assertEqual(streamer.state, "stopped")
+
 
 if __name__ == "__main__":
     unittest.main()

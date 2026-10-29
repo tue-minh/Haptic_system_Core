@@ -2,10 +2,14 @@
 
 Roles
 -----
-``motor``     TUE USB board (CoreXY + Z steppers, STS3215 gripper).
-``sensor_l``  Left PaXini tactile sensor board.
-``sensor_r``  Right PaXini tactile sensor board.
-``haptic``    STM32 master USB CDC link that receives the 5-valve haptic frames.
+``motor``     STM32 master board: CoreXY + Z steppers, the STS3215 gripper, and
+              the 100 Hz haptic output frames - **all on this one USB CDC port**.
+``sensor_l``  Left PaXini tactile sensor board (its own port).
+``sensor_r``  Right PaXini tactile sensor board (its own port).
+
+That is three ports in total.  The haptic stream shares the motor/STM32 link
+rather than owning a port (see ``unified_gui.haptic.Stm32HapticStreamer``'s
+``writer`` argument), so it has no row of its own here.
 
 The panel only *collects* the user's choices and emits request signals; the
 main window owns the actual workers so worker lifetime and shutdown stay in a
@@ -27,22 +31,20 @@ from ..widgets import StatusLed
 import serial.tools.list_ports
 
 # Line rates offered per role. The sensor default is taken straight from
-# paxini_usb_core so it always matches the reference reader; the motor board
-# and the haptic CDC link are 1 Mbaud per the project spec. All stay editable.
+# paxini_usb_core so it always matches the reference reader; the STM32 board is
+# 1 Mbaud per the project spec. All stay editable.
 BAUD_CHOICES = (921600, 1000000, 500000, 250000, 115200)
 
-ROLES = ("motor", "sensor_l", "sensor_r", "haptic")
+ROLES = ("motor", "sensor_l", "sensor_r")
 ROLE_LABELS = {
-    "motor": "Motor / Servo",
+    "motor": "STM32 (motor + haptic)",
     "sensor_l": "Left Sensor",
     "sensor_r": "Right Sensor",
-    "haptic": "STM32 Haptic Out",
 }
 DEFAULT_BAUD = {
     "motor": 1000000,
     "sensor_l": SENSOR_BAUDRATE,
     "sensor_r": SENSOR_BAUDRATE,
-    "haptic": 1000000,
 }
 
 

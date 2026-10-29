@@ -43,6 +43,47 @@ def clamp(value: float, lo: float, hi: float) -> float:
     return lo if value < lo else (hi if value > hi else value)
 
 
+class LockedSerial:
+    """Serial proxy that serialises writes on a shared handle.
+
+    The STM32 carries two TUE binary protocols on one USB CDC port: the motor
+    control frames (:class:`tue_usb.TueUsbClient`) and the 100 Hz haptic frames
+    (``unified_gui.haptic``).  Both must put whole 20-byte frames on the wire
+    without interleaving, so this proxy takes a lock around each write.  Reads
+    are deliberately *not* locked: only the motor thread ever reads, and the
+    haptic frames expect no reply, so a haptic frame may be written while the
+    motor thread is waiting for its response.
+    """
+
+    def __init__(self, serial_port, lock: threading.Lock) -> None:
+        self._port = serial_port
+        self._lock = lock
+
+    # -- locked ------------------------------------------------------------
+    def write(self, data):
+        with self._lock:
+            return self._port.write(data)
+
+    def flush(self):
+        with self._lock:
+            return self._port.flush()
+
+    def reset_input_buffer(self):
+        with self._lock:
+            return self._port.reset_input_buffer()
+
+    # -- pass-through (motor thread only) ----------------------------------
+    def read(self, size: int = 1):
+        return self._port.read(size)
+
+    @property
+    def in_waiting(self):
+        return self._port.in_waiting
+
+    def close(self):
+        return self._port.close()
+
+
 @dataclass
 class MotorSnapshot:
     """Immutable-by-convention telemetry copy handed to the GUI."""
@@ -72,6 +113,11 @@ class MotorSnapshot:
     last_warning: str = ""
     poll_hz: float = 0.0
     errors: int = 0
+
+    # ESP32 UART-slave ping (CAN 0x301 relayed by the STM32)
+    haptic_ping: str = ""
+    haptic_ping_ok: bool = False
+    haptic_ping_pending: bool = False
 
 
 class MotorWorker(threading.Thread):
@@ -104,6 +150,10 @@ class MotorWorker(threading.Thread):
         self._lock = threading.Lock()
         self._snap = MotorSnapshot(connecting=True, poll_hz=self.poll_hz)
         self._client = None
+        # Shared-transport state: the raw handle and the write lock that the
+        # haptic streamer borrows (see write_frame).
+        self._raw_serial = None
+        self._io_lock = threading.Lock()
         self._consecutive_errors = 0
         self._rate_t0 = time.perf_counter()
         self._rate_cnt = 0
@@ -128,12 +178,43 @@ class MotorWorker(threading.Thread):
             self._cv.notify_all()
 
     def close_client(self) -> None:
-        client = self._client
+        client, self._client = self._client, None
         if client is not None:
-            try:
-                client.disconnect()
-            except Exception:
-                pass
+            # TueUsbClient exposes disconnect(); older variant clients a close().
+            for name in ("disconnect", "close"):
+                fn = getattr(client, name, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+                    break
+        self._raw_serial = None
+
+    # -- shared port (haptic output) ---------------------------------------
+    @property
+    def has_port(self) -> bool:
+        return self._raw_serial is not None
+
+    def write_frame(self, frame: bytes) -> int:
+        """Write one TUE binary frame on the shared STM32 link.
+
+        Used by :class:`unified_gui.haptic.Stm32HapticStreamer`: the haptic
+        frames travel on the *same* COM port as the motor control traffic, so
+        they take the same write lock the motor client uses.  Returns 0 when the
+        port is not open yet.
+        """
+        raw = self._raw_serial
+        if raw is None:
+            return 0
+        with self._io_lock:
+            written = raw.write(frame)
+        if written != len(frame):
+            # A short write would leave a truncated frame on the shared link and
+            # desynchronise the STM32 byte parser; report it as "not sent".
+            self.log(f"haptic frame short write: {written}/{len(frame)} bytes")
+            return 0
+        return written
 
     # -- command submission -------------------------------------------------
     def _submit(self, action: str, urgent: bool = False, **kw) -> None:
@@ -164,6 +245,15 @@ class MotorWorker(threading.Thread):
     def servo_torque(self, on: bool) -> None:
         self._submit("servo_torque", on=bool(on))
 
+    def ping_haptic(self, token: int = 0) -> None:
+        """Ping the ESP32 haptic slave over the STM32 USART2 link (CAN 0x301)."""
+        if self._client is None:
+            self._update(haptic_ping="ESP32 ping: STM32 link is not connected",
+                         haptic_ping_ok=False, haptic_ping_pending=False)
+            return
+        self._update(haptic_ping_pending=True)
+        self._submit("haptic_ping", token=int(token) & 0xFF)
+
     # -- thread body --------------------------------------------------------
     def run(self) -> None:
         try:
@@ -188,6 +278,12 @@ class MotorWorker(threading.Thread):
 
         client = TueUsbClient(self.port, baudrate=self.baudrate, timeout=self._serial_timeout)
         client.connect()
+        # Route the client's writes through the shared lock so the haptic
+        # streamer can put its frames on the same port (see write_frame).
+        raw = getattr(client, "_serial", None)
+        if raw is not None:
+            self._raw_serial = raw
+            client._serial = LockedSerial(raw, self._io_lock)  # noqa: SLF001
         return client
 
     def _handshake(self) -> bool:
@@ -260,7 +356,11 @@ class MotorWorker(threading.Thread):
                 accel_speed = kw.get("accel")
                 self._jog(kw["axis"], vel, accel_speed)
             elif action == "jog_stop":
-                c.step_stop()
+                # Firmware workaround: on the current build STEP_STOP (and a
+                # zero-velocity jog) enters the deceleration path and wedges the
+                # MCU's USB stack, so the link dies on jog release. STEP_ABORT
+                # stops the step clock immediately and keeps the link alive.
+                c.step_abort()
             elif action == "abort":
                 c.step_abort()
                 self.log("EMERGENCY ABORT")
@@ -269,6 +369,30 @@ class MotorWorker(threading.Thread):
                 c.servo_set_pos(SERVO_ID, kw["pos"], speed=kw["speed"], accel=kw["accel"])
             elif action == "servo_torque":
                 c.servo_torque_enable(SERVO_ID, kw["on"])
+            elif action == "haptic_ping":
+                # A missing ESP32 is not a loss of the STM32 link, so keep this
+                # out of _consecutive_errors and report it in the snapshot.
+                try:
+                    fn = getattr(c, "haptic_ping", None)
+                    if not callable(fn):
+                        raise RuntimeError("client does not support haptic_ping()")
+                    info = fn(kw.get("token", 0))
+                except Exception as exc:
+                    detail = ""
+                    diag_fn = getattr(c, "haptic_uart_diag", None)
+                    if callable(diag_fn):
+                        try:
+                            detail = f" | {diag_fn()}"
+                        except Exception as diag_exc:
+                            detail = f" | diag failed: {diag_exc}"
+                    msg = f"ESP32 ping failed: {exc}{detail}"
+                    self._update(haptic_ping=msg,
+                                 haptic_ping_ok=False, haptic_ping_pending=False)
+                    self.log(msg)
+                    return
+                self._update(haptic_ping=str(info), haptic_ping_ok=True,
+                             haptic_ping_pending=False)
+                self.log(f"ESP32 ping ok: {info}")
             self._note_success()
         except Exception as exc:
             self._note_error(exc, action)

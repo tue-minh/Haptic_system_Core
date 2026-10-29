@@ -33,6 +33,8 @@ from .protocol import FrameParser
 from .payloads import (
     Decoders,
     Encoders,
+    HapticPingInfo,
+    HapticUartDiag,
     PositionXYZ,
     ServoFeedback,
     ServoFeedbackDynamics,
@@ -225,6 +227,18 @@ class TueUsbClient:
         elif can_id == CanId.SYS_ECHO:
             return [Frame(FrameType.RESP_OK, can_id, p, seq)]
 
+        # 1b. ESP32 UART slave ping (relayed by the STM32)
+        elif can_id == CanId.HAPTIC_PING:
+            token = p[0] if len(p) >= 1 else 0
+            payload = struct.pack("<BBBBBBBB", token, 1, 1, 0, 1, 0, 0, 0)
+            return [Frame(FrameType.RESP_OK, can_id, payload, seq)]
+
+        # 1c. STM32-side USART2 link diagnostics
+        elif can_id == CanId.HAPTIC_DIAG:
+            # init + rx_armed + last tx ok, no errors, 0 rx bytes yet
+            payload = struct.pack("<BBBBBBBB", 0x0B, 0, 0, 0, 0, 0, 0, 0)
+            return [Frame(FrameType.RESP_OK, can_id, payload, seq)]
+
         # 2. Stepper Commands
         elif can_id == CanId.STEP_GET_INFO:
             payload = struct.pack("<HHHH", 80, 400, 50, 4000)
@@ -376,7 +390,9 @@ class TueUsbClient:
         Send a request frame and synchronously wait for matching response frame.
         """
         cid = int(can_id)
-        if is_reserved_can_id(cid):
+        if is_reserved_can_id(cid) and cid not in (
+            int(CanId.HAPTIC_PING), int(CanId.HAPTIC_DIAG)
+        ):
             raise ValueError(f"CAN ID 0x{cid:X} is strictly reserved for user custom communications!")
 
         t_timeout = timeout if timeout is not None else self.timeout
@@ -518,6 +534,22 @@ class TueUsbClient:
         """Send loopback data and return echo payload."""
         resp = self.transact(CanId.SYS_ECHO, Encoders.sys_echo(data))
         return resp.payload
+
+    def haptic_ping(self, token: int = 0, timeout: Optional[float] = None) -> HapticPingInfo:
+        """Ping the ESP32 haptic slave through the STM32 USART2 bridge.
+
+        The STM32 forwards a CAN 0x301 request to the ESP32 at 115200 baud and
+        relays the slave's RESP_OK payload. Raises ``TueUsbError`` with
+        ``ERR_TIMEOUT`` when the slave does not answer.
+        """
+        resp = self.transact(
+            CanId.HAPTIC_PING, Encoders.haptic_ping(token), timeout=timeout)
+        return Decoders.haptic_ping(resp.payload)
+
+    def haptic_uart_diag(self) -> HapticUartDiag:
+        """Read STM32-side USART2 link diagnostics (CAN 0x302)."""
+        resp = self.transact(CanId.HAPTIC_DIAG)
+        return Decoders.haptic_uart_diag(resp.payload)
 
     # ==========================================================================
     # High-Level Stepper Motion API (0x200 - 0x281)
