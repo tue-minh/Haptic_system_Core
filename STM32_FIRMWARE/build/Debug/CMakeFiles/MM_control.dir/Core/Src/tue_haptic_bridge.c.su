@@ -1,0 +1,12 @@
+tue_haptic_bridge.c:48:13:uart_poll_rx_byte	32	static
+tue_haptic_bridge.c:80:13:uart_drain_rx	16	static
+tue_haptic_bridge.c:94:13:uart_write_bytes	40	static
+tue_haptic_bridge.c:133:13:build_wire_frame8	32	static
+tue_haptic_bridge.c:156:13:find_ping_reply_frame	32	static
+tue_haptic_bridge.c:200:6:tue_haptic_init	16	static
+tue_haptic_bridge.c:224:6:tue_haptic_forward	16	static
+tue_haptic_bridge.c:237:6:tue_haptic_ping	112	static
+tue_haptic_bridge.c:295:6:tue_haptic_ingest	64	static
+tue_haptic_bridge.c:346:6:tue_haptic_reset_stats	32	static
+tue_haptic_bridge.c:367:6:tue_haptic_get_payload	32	static
+tue_haptic_bridge.c:378:6:tue_haptic_get_diag	16	static
