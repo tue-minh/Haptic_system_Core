@@ -194,9 +194,12 @@ float compute_valve_voltage(float force_n)
 void handle_haptic_packet(const uint8_t* payload)
 {
     // 8-byte unified payload received from CAN ID 0x300:
-    //   [0] Fz_Left (0.1N/LSB)   -> Valve D   [3] Weight_Tip    -> w_A
-    //   [1] Fz_Right (0.1N/LSB)  -> Valve E   [4] Weight_Mid    -> w_B
-    //   [2] F_shear_avg (0.1N)   -> A/B/C     [5] Weight_Base   -> w_C
+    //   [0] F_Valve_A (0.1N/LSB) -> Valve A: Fx avg (Bottom - Tip)
+    //   [1] F_Valve_B (0.1N/LSB) -> Valve B: Fz avg (Bottom - Mid)
+    //   [2] F_Valve_C (0.1N/LSB) -> Valve C: Fx avg (Bottom - Base)
+    //   [3] F_Valve_D (0.1N/LSB) -> Valve D: Fy avg (Lateral Left)
+    //   [4] F_Valve_E (0.1N/LSB) -> Valve E: Fy avg (Lateral Right)
+    //   [5] Reserved (0x00)
     //   [6] Status_Flags         [7] Frame_Counter
     last_packet_ms      = millis();
     last_haptic_counter = payload[7];
@@ -210,18 +213,11 @@ void handle_haptic_packet(const uint8_t* payload)
         }
     }
 
-    float f_left_z  = payload[0] * 0.1f;
-    float f_right_z = payload[1] * 0.1f;
-    float f_shear   = payload[2] * 0.1f;
-    float w_A = payload[3] / 255.0f;
-    float w_B = payload[4] / 255.0f;
-    float w_C = payload[5] / 255.0f;
-
-    float f_A = f_shear * w_A;  // Valve A: Bottom - Tip
-    float f_B = f_shear * w_B;  // Valve B: Bottom - Mid
-    float f_C = f_shear * w_C;  // Valve C: Bottom - Base
-    float f_D = f_left_z;       // Valve D: Lateral Left
-    float f_E = f_right_z;      // Valve E: Lateral Right
+    float f_A = payload[0] * 0.1f;  // Valve A: Fx avg (Bottom - Tip)
+    float f_B = payload[1] * 0.1f;  // Valve B: Fz avg (Bottom - Mid)
+    float f_C = payload[2] * 0.1f;  // Valve C: Fx avg (Bottom - Base)
+    float f_D = payload[3] * 0.1f;  // Valve D: Fy avg (Lateral Left)
+    float f_E = payload[4] * 0.1f;  // Valve E: Fy avg (Lateral Right)
 
     float target[DAC_COUNT];
     target[0] = compute_valve_voltage(f_A);

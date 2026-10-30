@@ -71,12 +71,12 @@ Synthesized by the GUI from the two 52-taxel force-sensor jaws; consumed by the 
 
 | Byte | Field | Unit / Range | Meaning | Drives |
 |---|---|---|---|---|
-| 0 | `Fz_Left` | 0.1 N/LSB, 0..25.5 N | left jaw normal force | Valve D (lateral left) |
-| 1 | `Fz_Right` | 0.1 N/LSB, 0..25.5 N | right jaw normal force | Valve E (lateral right) |
-| 2 | `F_shear_avg` | 0.1 N/LSB, 0..25.5 N | average of the two jaws' tangential shear | Valves A/B/C via weights |
-| 3 | `Weight_Tip` | 0..255 → 0.0..1.0 | zone A share (taxel rows 0–15) | Valve A (bottom – distal tip) |
-| 4 | `Weight_Mid` | 0..255 → 0.0..1.0 | zone B share (taxel rows 16–35) | Valve B (bottom – medial mid) |
-| 5 | `Weight_Base` | 0..255 → 0.0..1.0 | zone C share = `255 − W_A − W_B` (taxel rows 36–51) | Valve C (bottom – proximal base) |
+| 0 | `F_Valve_A` | 0.1 N/LSB, 0..25.5 N | negative transverse shear (-X direction) | Valve A (bottom – distal tip) |
+| 1 | `F_Valve_B` | 0.1 N/LSB, 0..25.5 N | average normal clamping force (Fz avg) | Valve B (bottom – medial mid) |
+| 2 | `F_Valve_C` | 0.1 N/LSB, 0..25.5 N | positive transverse shear (+X direction) | Valve C (bottom – proximal base) |
+| 3 | `F_Valve_D` | 0.1 N/LSB, 0..25.5 N | positive longitudinal shear (+Y direction) | Valve D (lateral left flank) |
+| 4 | `F_Valve_E` | 0.1 N/LSB, 0..25.5 N | negative longitudinal shear (-Y direction) | Valve E (lateral right flank) |
+| 5 | `Reserved` | 0x00 | reserved for expansion | — |
 | 6 | `Status_Flags` | bitmask (below) | contact/slip/tare status | display + STM32 slip counter |
 | 7 | `Frame_Counter` | 0..255, rolling | per-frame sequence from the GUI | watchdog/debug (echoed in ping reply) |
 
@@ -91,23 +91,31 @@ Synthesized by the GUI from the two 52-taxel force-sensor jaws; consumed by the 
 
 ### 3.1 GUI synthesis (`CONTROL_GUI/unified_gui/haptic.py`)
 
-- Inputs per jaw: `fz`, `fy` (or `fx`, shear axis configurable, default **Y**), `taxels_fz` (52-vector or (52,3) array), optional `t`/`age_s`.
+- Inputs per jaw: `fz`, `fy`, `fx`, `taxels_fz` (52-vector or (52,3) array), optional `t`/`age_s`.
+- Directional shear resolution:
+  - Transverse $X$ axis: Sensors are mounted face-to-face ($\hat{X}_R = -\hat{X}_L$), so net shear is $F_{x,\text{net}} = (F_{x,L} - F_{x,R})/2$.
+    - Moving in $+X$ ($F_{x,\text{net}} > 0$) inflates **Valve C**; moving in $-X$ ($F_{x,\text{net}} < 0$) inflates **Valve A**.
+  - Longitudinal $Y$ axis: Tips point downward ($\hat{Y}_L = \hat{Y}_R$), so net shear is $F_{y,\text{net}} = (F_{y,L} + F_{y,R})/2$.
+    - Moving in $+Y$ ($F_{y,\text{net}} > 0$) inflates **Valve D**; moving in $-Y$ ($F_{y,\text{net}} < 0$) inflates **Valve E**.
+  - Normal $Z$ axis: Clamping force is averaged: $F_z^{\text{avg}} = (F_{z,L} + F_{z,R})/2$ driving **Valve B**.
 - Stale-data guard: a jaw whose last frame is older than 0.10 s contributes zeros.
 - Forces are quantized with `clamp_u8`: `byte = clamp(0, 255, round(N * 10))`.
-- Zone weights: sum both jaws' 52-taxel Fz vectors; if total > 0.20 N,
-  `W_A = 255·Σ(zone tip)/Σtotal`, `W_B = 255·Σ(zone mid)/Σtotal`, `W_C = 255 − W_A − W_B`; else all zero.
 - `Frame_Counter` is the synthesizer's rolling 8-bit counter (independent of the frame header `SEQ`).
-- Acceptance vectors (GUI `self_test()`): pinch 5 N / 3 N → `32 1E 00 00 00 00 03 xx`; tip-only shear 2 N/1 N → `14 14 0A FF 00 00 03 xx`.
 
 ### 3.2 STM32 handling (`Core/Src/tue_usb_binary.c`, `Core/Src/tue_haptic_bridge.c`)
 
 - `usb_dispatch()` accepts 0x300 only as `TYPE=REQ, DLC=8` raw 20 bytes → **no USB response** (fire-and-forget, host stays at 100 Hz).
 - `tue_haptic_ingest()` re-validates SOF/EOF/TYPE/CAN_ID/DLC/CRC, caches the payload atomically (`g_tue_haptic_payload`, PRIMASK-guarded, available for reflex control), counts SLIP_ALERTs, then forwards the **exact same 20 raw bytes** to USART2 with a blocking polling TX (20 ms timeout; failures count `tx_drops`).
 
-### 3.3 ESP32 handling (`ESP32_FIRMWARE/src/tue_protocol.cpp`)
+### 3.3 ESP32 handling (`ESP32_FIRMWARE/src/tue_protocol.cpp`, `ESP32_FIRMWARE/src/haptic_core.cpp`)
 
 - Sliding-window parser over a 512 B buffer: preamble/postamble/CRC validated; resync drops 1 byte on mismatch; valid 0x300 + DLC=8 frames reset the error counter and are dispatched to `handle_haptic_packet()`.
-- Valves: `f_A = F_shear·(W_A/255)`, `f_B = F_shear·(W_B/255)`, `f_C = F_shear·(W_C/255)`, `f_D = Fz_Left`, `f_E = Fz_Right` (all in N).
+- Direct valve force unpacking:
+  - `f_A = payload[0] * 0.1f` (Valve A: -X directional shear, Tip)
+  - `f_B = payload[1] * 0.1f` (Valve B: Fz clamping force, Mid)
+  - `f_C = payload[2] * 0.1f` (Valve C: +X directional shear, Base)
+  - `f_D = payload[3] * 0.1f` (Valve D: +Y directional shear, Left flank)
+  - `f_E = payload[4] * 0.1f` (Valve E: -Y directional shear, Right flank)
 - Each force goes through the transfer function (§6.1); DACs written only when voltage changed ≥ 0.015 V.
 
 ---

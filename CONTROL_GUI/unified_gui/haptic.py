@@ -80,11 +80,11 @@ FLAG_NAMES = (
 # finger-centric millimetre frame: x across the finger width, y from tip (0)
 # to base.  A/B/C run along the underside pad, D/E sit on the two flanks.
 VALVE_LAYOUT = (
-    ("A", "Tip", 0.0, 0.0),
-    ("B", "Mid", 0.0, 11.0),
-    ("C", "Base", 0.0, 22.0),
-    ("D", "Left flank", -7.0, 11.0),
-    ("E", "Right flank", 7.0, 11.0),
+    ("A", "Tip (-X)", 0.0, 0.0),
+    ("B", "Mid (Fz)", 0.0, 11.0),
+    ("C", "Base (+X)", 0.0, 22.0),
+    ("D", "Left flank (+Y)", -7.0, 11.0),
+    ("E", "Right flank (-Y)", 7.0, 11.0),
 )
 VALVE_NAMES = tuple(v[0] for v in VALVE_LAYOUT)
 
@@ -198,17 +198,17 @@ class HapticPayloadSynthesizer:
         return 0.0
 
     def _side(self, data, now: float):
-        """Return ``(fz, shear, fz_vector, fresh)`` for one jaw."""
+        """Return ``(fz, fx, fy, fz_vector, fresh)`` for one jaw."""
         if not data:
-            return 0.0, 0.0, np.zeros(N_TAXELS), False
+            return 0.0, 0.0, 0.0, np.zeros(N_TAXELS), False
         fresh = self._age(data, now) <= self.stale_s
         fz = float(data.get("fz", 0.0) or 0.0)
-        key = "fx" if self.shear_axis == "X" else "fy"
-        shear = abs(float(data.get(key, 0.0) or 0.0))
+        fx = float(data.get("fx", 0.0) or 0.0)
+        fy = float(data.get("fy", 0.0) or 0.0)
         fzvec = _fz_vector(data)
         if not fresh:
-            return 0.0, 0.0, np.zeros(N_TAXELS), False
-        return fz, shear, fzvec, True
+            return 0.0, 0.0, 0.0, np.zeros(N_TAXELS), False
+        return fz, fx, fy, fzvec, True
 
     def _slip(self, data, fresh: bool) -> bool:
         if not fresh or not isinstance(data, dict):
@@ -216,8 +216,9 @@ class HapticPayloadSynthesizer:
         fz = float(data.get("fz", 0.0) or 0.0)
         if fz <= self.force_thresh:
             return False
-        key = "fx" if self.shear_axis == "X" else "fy"
-        shear = abs(float(data.get(key, 0.0) or 0.0))
+        fx = float(data.get("fx", 0.0) or 0.0)
+        fy = float(data.get("fy", 0.0) or 0.0)
+        shear = (fx**2 + fy**2)**0.5
         return (shear / fz) > self.slip_mu
 
     # -- primary API --------------------------------------------------------
@@ -233,24 +234,54 @@ class HapticPayloadSynthesizer:
         if now is None:
             now = time.perf_counter()
 
-        fz_l, shear_l, tax_l, fresh_l = self._side(left_data, now)
-        fz_r, shear_r, tax_r, fresh_r = self._side(right_data, now)
+        fz_l, fx_l, fy_l, tax_l, fresh_l = self._side(left_data, now)
+        fz_r, fx_r, fy_r, tax_r, fresh_r = self._side(right_data, now)
 
-        byte_fz_l = clamp_u8(fz_l)
-        byte_fz_r = clamp_u8(fz_r)
-        shear_avg = (shear_l + shear_r) / 2.0
-        byte_shear = clamp_u8(shear_avg)
-
-        combined = tax_l + tax_r
-        s_total = float(combined.sum())
-        if s_total > self.contact_thresh:
-            s1 = float(combined[ZONE_TIP[0]:ZONE_TIP[1]].sum())
-            s2 = float(combined[ZONE_MID[0]:ZONE_MID[1]].sum())
-            w_a = min(255, int(round(255.0 * s1 / s_total)))
-            w_b = min(255, int(round(255.0 * s2 / s_total)))
-            w_c = max(0, 255 - (w_a + w_b))
+        # Average Fz across valid sensors -> Valve B
+        if fresh_l and fresh_r:
+            fz_avg = (fz_l + fz_r) / 2.0
+            # Face-to-face: X axes are inverted, so difference gives net transverse shear
+            fx_net = (fx_l - fx_r) / 2.0
+            # Y axes are aligned: average gives net longitudinal shear
+            fy_net = (fy_l + fy_r) / 2.0
+        elif fresh_l:
+            fz_avg = fz_l
+            fx_net = fx_l
+            fy_net = fy_l
+        elif fresh_r:
+            fz_avg = fz_r
+            fx_net = -fx_r  # inverted for right jaw
+            fy_net = fy_r
         else:
-            w_a = w_b = w_c = 0
+            fz_avg = 0.0
+            fx_net = 0.0
+            fy_net = 0.0
+
+        # Directional mapping:
+        # Move in +X -> Valve C blows; Move in -X -> Valve A blows
+        if fx_net > 0:
+            f_c = fx_net
+            f_a = 0.0
+        else:
+            f_c = 0.0
+            f_a = abs(fx_net)
+
+        # Move in +Y -> Valve D blows; Move in -Y -> Valve E blows
+        if fy_net > 0:
+            f_d = fy_net
+            f_e = 0.0
+        else:
+            f_d = 0.0
+            f_e = abs(fy_net)
+
+        f_b = fz_avg
+
+        byte_a = clamp_u8(f_a)
+        byte_b = clamp_u8(f_b)
+        byte_c = clamp_u8(f_c)
+        byte_d = clamp_u8(f_d)
+        byte_e = clamp_u8(f_e)
+        byte_spare = 0
 
         flags = 0
         if fresh_l and fz_l > self.force_thresh:
@@ -263,8 +294,8 @@ class HapticPayloadSynthesizer:
             flags |= FLAG_TARE
 
         payload = struct.pack(
-            "BBBBBBBB", byte_fz_l, byte_fz_r, byte_shear,
-            w_a, w_b, w_c, flags, self._counter,
+            "BBBBBBBB", byte_a, byte_b, byte_c,
+            byte_d, byte_e, byte_spare, flags, self._counter,
         )
         self._counter = (self._counter + 1) & 0xFF
         return payload
@@ -368,24 +399,28 @@ class HapticSnapshot:
         if len(payload) < PAYLOAD_LEN:
             payload = bytes(payload) + b"\x00" * (PAYLOAD_LEN - len(payload))
 
-        fz_l = payload[0] * FORCE_LSB_N
-        fz_r = payload[1] * FORCE_LSB_N
-        shear = payload[2] * FORCE_LSB_N
-        w_a, w_b, w_c = payload[3], payload[4], payload[5]
+        f_a = payload[0] * FORCE_LSB_N
+        f_b = payload[1] * FORCE_LSB_N
+        f_c = payload[2] * FORCE_LSB_N
+        f_d = payload[3] * FORCE_LSB_N
+        f_e = payload[4] * FORCE_LSB_N
         flags = payload[6]
 
         forces = {
-            "A": shear * (w_a / 255.0),
-            "B": shear * (w_b / 255.0),
-            "C": shear * (w_c / 255.0),
-            "D": fz_l,
-            "E": fz_r,
+            "A": f_a,
+            "B": f_b,
+            "C": f_c,
+            "D": f_d,
+            "E": f_e,
         }
         weights = {
-            "A": w_a / 255.0, "B": w_b / 255.0, "C": w_c / 255.0,
-            "D": payload[0] / 255.0, "E": payload[1] / 255.0,
+            "A": payload[0] / 255.0,
+            "B": payload[1] / 255.0,
+            "C": payload[2] / 255.0,
+            "D": payload[3] / 255.0,
+            "E": payload[4] / 255.0,
         }
-        raws = {"A": w_a, "B": w_b, "C": w_c, "D": payload[0], "E": payload[1]}
+        raws = {"A": payload[0], "B": payload[1], "C": payload[2], "D": payload[3], "E": payload[4]}
 
         valves = tuple(
             HapticValve(

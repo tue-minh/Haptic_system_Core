@@ -184,15 +184,16 @@ class GuiSmokeTests(unittest.TestCase):
         view = ValveMapView()
         self.assertEqual(len(view.scatter.data), 5)   # one point per valve
 
-        payload = bytes([20, 20, 10, 255, 0, 0, 0x03, 0])
+        # Payload: A=10 (1.0N), B=20 (2.0N), C=10 (1.0N), D=20 (2.0N), E=20 (2.0N), 0, flags=0x03, counter=0
+        payload = bytes([10, 20, 10, 20, 20, 0, 0x03, 0])
         snap = HapticSnapshot.from_payload(payload, 1.0, 0.25,
                                            frame=TueBinaryEncoder().encode(payload))
         view.update_snapshot(snap)
         self.assertEqual(len(view.scatter.data), 5)
         self.assertEqual(view.table.item(0, 0).text(), "A")
         self.assertEqual(view.table.item(3, 0).text(), "D")
-        self.assertEqual(view.table.item(0, 2).text().strip(), "1.00")   # A: shear*1.0
-        self.assertEqual(view.table.item(3, 2).text().strip(), "2.00")   # D: Fz_Left
+        self.assertEqual(view.table.item(0, 2).text().strip(), "1.00")   # A: Fx avg
+        self.assertEqual(view.table.item(3, 2).text().strip(), "2.00")   # D: Fy avg
         self.assertIn("AA 55", view.lbl_frame.text())
 
         view.update_snapshot(None)                    # offline -> dashes

@@ -48,28 +48,39 @@ class SynthesizerTests(unittest.TestCase):
         self.assertEqual(payload[7], 0)  # Frame_Counter
 
     def test_pinch_only(self):
+        # fz_avg = (5.0 + 3.0) / 2 = 4.0 N -> 40 = 0x28 (Valve B)
         payload = self.synth.synthesize(_side(fz=5.0), _side(fz=3.0), now=0.0)
-        self.assertEqual(payload[:7], bytes([0x32, 0x1E, 0x00, 0x00, 0x00, 0x00, 0x03]))
+        self.assertEqual(payload[:7], bytes([0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x03]))
 
-    def test_shear_at_tip(self):
-        tip = _side(fz=2.0, fy=1.0)
-        tip["taxels_fz"] = [0.0] * h.N_TAXELS
-        for i in range(h.ZONE_TIP[0], h.ZONE_TIP[1]):
-            tip["taxels_fz"][i] = 1.0
-        payload = self.synth.synthesize(tip, tip, now=0.0)
-        self.assertEqual(payload[:7], bytes([0x14, 0x14, 0x0A, 0xFF, 0x00, 0x00, 0x03]))
+    def test_directional_x_and_y_mapping(self):
+        # Move +X: Valve C blows; Move +Y: Valve D blows
+        # Left: fx=2.0, fy=1.0; Right: fx=-2.0 (inverted!), fy=1.0
+        # fx_net = (2.0 - (-2.0)) / 2 = +2.0 -> Valve C = 20, Valve A = 0
+        # fy_net = (1.0 + 1.0) / 2 = +1.0 -> Valve D = 10, Valve E = 0
+        # fz_avg = 6.0 N -> Valve B = 60
+        left_pos = _side(fz=6.0, fx=2.0, fy=1.0)
+        right_pos = _side(fz=6.0, fx=-2.0, fy=1.0)
+        payload_pos = self.synth.synthesize(left_pos, right_pos, now=0.0)
+        self.assertEqual(payload_pos[:7], bytes([0, 60, 20, 10, 0, 0, 0x03]))
 
-    def test_shear_axis_x_selects_fx(self):
-        synth = h.HapticPayloadSynthesizer(shear_axis="X")
-        payload = synth.synthesize(_side(fz=2.0, fx=2.0, fy=9.9), _side(fz=2.0, fx=1.0), now=0.0)
-        self.assertEqual(payload[2], 0x0F)  # mean |Fx| = 1.5 N -> 15
+        # Move opposite (-X, -Y): Valve A blows, Valve E blows
+        # Left: fx=-2.0, fy=-1.0; Right: fx=2.0 (inverted!), fy=-1.0
+        # fx_net = (-2.0 - 2.0) / 2 = -2.0 -> Valve A = 20, Valve C = 0
+        # fy_net = (-1.0 + -1.0) / 2 = -1.0 -> Valve E = 10, Valve D = 0
+        left_neg = _side(fz=6.0, fx=-2.0, fy=-1.0)
+        right_neg = _side(fz=6.0, fx=2.0, fy=-1.0)
+        payload_neg = self.synth.synthesize(left_neg, right_neg, now=0.0)
+        self.assertEqual(payload_neg[:7], bytes([20, 60, 0, 0, 10, 0, 0x03]))
 
     def test_stale_side_is_zeroed(self):
         stale = _side(fz=5.0, fy=2.0, age_s=0.5)
         fresh = _side(fz=3.0, fy=1.0)
         payload = self.synth.synthesize(stale, fresh, now=0.0)
-        self.assertEqual(payload[0], 0)     # left contribution zeroed
-        self.assertEqual(payload[1], 30)    # right intact
+        self.assertEqual(payload[0], 0)     # Valve A = 0
+        self.assertEqual(payload[1], 30)    # Valve B (Fz) = 30 from fresh
+        self.assertEqual(payload[2], 0)     # Valve C = 0
+        self.assertEqual(payload[3], 10)    # Valve D (+Fy) = 10 from fresh
+        self.assertEqual(payload[4], 0)     # Valve E (-Fy) = 0
         self.assertFalse(payload[6] & h.FLAG_LEFT_CONTACT)
         self.assertTrue(payload[6] & h.FLAG_RIGHT_CONTACT)
 
@@ -80,15 +91,6 @@ class SynthesizerTests(unittest.TestCase):
         long = {"taxels_fz": list(range(100))}
         payload = self.synth.synthesize(short, long, now=0.0)
         self.assertEqual(len(payload), h.PAYLOAD_LEN)
-
-    def test_weighting_sums_to_255(self):
-        tax = [0.0] * h.N_TAXELS
-        tax[h.ZONE_MID[0]:h.ZONE_MID[1]] = [1.0] * (h.ZONE_MID[1] - h.ZONE_MID[0])
-        tax[h.ZONE_BASE[0]:h.ZONE_BASE[1]] = [1.0] * (h.ZONE_BASE[1] - h.ZONE_BASE[0])
-        payload = self.synth.synthesize(_side(fz=1.0, taxels=0.0, taxels_fz=tax), {}, now=0.0)
-        w_a, w_b, w_c = payload[3], payload[4], payload[5]
-        self.assertEqual(w_a, 0)
-        self.assertEqual(w_a + w_b + w_c, 255)
 
     def test_slip_flag_from_shear_ratio(self):
         # |Fy|/Fz = 2.0/1.0 = 2.0 > mu_s -> slip
@@ -144,14 +146,14 @@ class EncoderTests(unittest.TestCase):
 
 class SnapshotTests(unittest.TestCase):
     def test_valve_forces_from_payload(self):
-        snap = h.HapticSnapshot.from_payload(bytes([20, 20, 10, 255, 0, 0, 0x03, 0]), 1.0, 0.5)
+        # Payload [A=10 (1.0N), B=20 (2.0N), C=10 (1.0N), D=30 (3.0N), E=30 (3.0N), 0, 0x03, 0]
+        snap = h.HapticSnapshot.from_payload(bytes([10, 20, 10, 30, 30, 0, 0x03, 0]), 1.0, 0.5)
         forces = {v.name: v.force for v in snap.valves}
-        # D/E carry the bilateral clamp force, A/B/C split the shear by weight
-        self.assertAlmostEqual(forces["D"], 2.0, places=6)
-        self.assertAlmostEqual(forces["E"], 2.0, places=6)
         self.assertAlmostEqual(forces["A"], 1.0, places=6)
-        self.assertAlmostEqual(forces["B"], 0.0, places=6)
-        self.assertAlmostEqual(forces["C"], 0.0, places=6)
+        self.assertAlmostEqual(forces["B"], 2.0, places=6)
+        self.assertAlmostEqual(forces["C"], 1.0, places=6)
+        self.assertAlmostEqual(forces["D"], 3.0, places=6)
+        self.assertAlmostEqual(forces["E"], 3.0, places=6)
         self.assertEqual(snap.flags, 0x03)
         self.assertEqual(snap.flag_names, ["L-contact", "R-contact"])
         self.assertEqual(snap.frame, b"")  # no wire frame supplied to the model
@@ -203,8 +205,8 @@ class StreamerTests(unittest.TestCase):
 
         decoded = Frame.from_bytes(fake.writes[-1])
         self.assertEqual(int(decoded.can_id), h.CAN_ID)
-        self.assertEqual(decoded.payload[0], 50)   # Fz_Left 5.0 N
-        self.assertEqual(decoded.payload[1], 30)   # Fz_Right 3.0 N
+        self.assertEqual(decoded.payload[0], 0)    # Valve A (Fx avg) 0.0 N
+        self.assertEqual(decoded.payload[1], 40)   # Valve B (Fz avg) 4.0 N
 
     def test_snapshot_reports_state_and_rate(self):
         streamer, _fake = self._run()
@@ -258,7 +260,8 @@ class StreamerTests(unittest.TestCase):
         self.assertTrue(all(len(f) == h.FRAME_LEN for f in frames))
         decoded = Frame.from_bytes(frames[-1])
         self.assertEqual(int(decoded.can_id), h.CAN_ID)
-        self.assertEqual(decoded.payload[0], 50)   # Fz_Left 5.0 N
+        self.assertEqual(decoded.payload[0], 0)    # Valve A (Fx avg) 0.0 N
+        self.assertEqual(decoded.payload[1], 40)   # Valve B (Fz avg) 4.0 N
         self.assertGreaterEqual(streamer.snapshot().sent, 10)
 
     def test_shared_writer_returning_zero_counts_as_not_sent(self):
