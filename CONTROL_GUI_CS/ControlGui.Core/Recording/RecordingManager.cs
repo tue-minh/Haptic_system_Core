@@ -10,31 +10,49 @@ namespace ControlGui.Core.Recording
     public class RecordingManager : IDisposable
     {
         private readonly Action<string> _log;
-        private string _outputDir;
-        private UnifiedRecorder? _masterRecorder;
-        private readonly Dictionary<string, CsvRecorder> _sensorRecorders = new();
+        private string _targetPath;
+        private SqliteRecorder? _sqliteRecorder;
         private readonly Stopwatch _elapsedSw = new();
 
-        public bool IsRecording => _masterRecorder != null;
+        public bool IsRecording => _sqliteRecorder != null;
         public double ElapsedSeconds => _elapsedSw.Elapsed.TotalSeconds;
-        public long RowsLogged => _masterRecorder?.Rows ?? 0;
-        public List<string> CurrentFiles { get; } = new();
+        public long RowsLogged => _sqliteRecorder?.Rows ?? 0;
+        public string CurrentTable => _sqliteRecorder?.TableName ?? "";
+        public string DbPath => ResolveDbPath(_targetPath);
 
         public string OutputDir
         {
-            get => _outputDir;
+            get => _targetPath;
             set
             {
-                _outputDir = value;
-                Directory.CreateDirectory(_outputDir);
+                _targetPath = value;
+                string dir = Path.GetDirectoryName(Path.GetFullPath(DbPath))!;
+                Directory.CreateDirectory(dir);
             }
         }
 
-        public RecordingManager(Action<string> log, string? defaultOutputDir = null)
+        public RecordingManager(Action<string> log, string? defaultPath = null)
         {
             _log = log;
-            _outputDir = defaultOutputDir ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Unified_Control");
-            Directory.CreateDirectory(_outputDir);
+            _targetPath = defaultPath ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Unified_Control", "recordings.db");
+            string dir = Path.GetDirectoryName(Path.GetFullPath(DbPath))!;
+            Directory.CreateDirectory(dir);
+        }
+
+        private static string ResolveDbPath(string inputPath)
+        {
+            if (string.IsNullOrWhiteSpace(inputPath))
+            {
+                return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Unified_Control", "recordings.db");
+            }
+
+            if (inputPath.EndsWith(".db", StringComparison.OrdinalIgnoreCase) ||
+                inputPath.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase))
+            {
+                return inputPath;
+            }
+
+            return Path.Combine(inputPath, "recordings.db");
         }
 
         public void Start(
@@ -45,36 +63,10 @@ namespace ControlGui.Core.Recording
         {
             if (IsRecording) return;
 
+            string dbFile = DbPath;
             string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            CurrentFiles.Clear();
-
-            // 1. Per-sensor recorders
-            _sensorRecorders.Clear();
+            string tableName = $"rec_{stamp}";
             double t0 = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
-
-            if (linkL != null && linkL.IsActive() && linkL.Worker != null)
-            {
-                string portSanitized = linkL.Port.Replace("/", "_").Replace("\\", "_");
-                string pathL = Path.Combine(_outputDir, $"paxini_{stamp}_L_{portSanitized}.csv");
-                var recL = new CsvRecorder(pathL, t0, $"PaXini Left Sensor on {linkL.Port}");
-                linkL.Worker.OnRecordedRow = recL.Push;
-                _sensorRecorders["L"] = recL;
-                CurrentFiles.Add(pathL);
-            }
-
-            if (linkR != null && linkR.IsActive() && linkR.Worker != null)
-            {
-                string portSanitized = linkR.Port.Replace("/", "_").Replace("\\", "_");
-                string pathR = Path.Combine(_outputDir, $"paxini_{stamp}_R_{portSanitized}.csv");
-                var recR = new CsvRecorder(pathR, t0, $"PaXini Right Sensor on {linkR.Port}");
-                linkR.Worker.OnRecordedRow = recR.Push;
-                _sensorRecorders["R"] = recR;
-                CurrentFiles.Add(pathR);
-            }
-
-            // 2. Master unified recorder
-            string masterPath = Path.Combine(_outputDir, $"data_record_{stamp}.csv");
-            CurrentFiles.Insert(0, masterPath);
 
             Func<List<double>> sampleFn = () =>
             {
@@ -96,9 +88,17 @@ namespace ControlGui.Core.Recording
                 return row;
             };
 
-            _masterRecorder = new UnifiedRecorder(masterPath, t0, sampleFn, rateHz, "Unified Motor & Dual Tactile Data Log");
+            _sqliteRecorder = new SqliteRecorder(
+                dbPath: dbFile,
+                tableName: tableName,
+                t0: t0,
+                sampleFn: sampleFn,
+                rateHz: rateHz,
+                meta: $"Dual Tactile & Motor Session at {DateTime.Now:yyyy-MM-dd HH:mm:ss}"
+            );
+
             _elapsedSw.Restart();
-            _log($"[recording] Started recording session -> {masterPath}");
+            _log($"[recording] Started recording -> SQLite DB: '{Path.GetFileName(dbFile)}', Table: '[{tableName}]'");
         }
 
         private static void AddSensorBlock(List<double> row, SensorLink? link)
@@ -145,21 +145,12 @@ namespace ControlGui.Core.Recording
             if (!IsRecording) return 0;
 
             _elapsedSw.Stop();
-            long totalRows = _masterRecorder!.Stop();
-            _masterRecorder.Dispose();
-            _masterRecorder = null;
+            string tbl = _sqliteRecorder!.TableName;
+            long totalRows = _sqliteRecorder.Stop();
+            _sqliteRecorder.Dispose();
+            _sqliteRecorder = null;
 
-            if (linkL?.Worker != null) linkL.Worker.OnRecordedRow = null;
-            if (linkR?.Worker != null) linkR.Worker.OnRecordedRow = null;
-
-            foreach (var rec in _sensorRecorders.Values)
-            {
-                rec.Stop();
-                rec.Dispose();
-            }
-            _sensorRecorders.Clear();
-
-            _log($"[recording] Stopped recording session. Total rows: {totalRows}");
+            _log($"[recording] Stopped recording session table '[{tbl}]'. Total rows logged: {totalRows}");
             return totalRows;
         }
 

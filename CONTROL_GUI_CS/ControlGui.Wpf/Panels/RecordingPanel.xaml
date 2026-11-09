@@ -22,20 +22,20 @@
             <TextBlock x:Name="TxtRows" Text="Rows logged: 0" Foreground="#757575" Margin="0,0,0,4"/>
             <TextBlock x:Name="TxtFiles" Text="No active recording" Foreground="#757575" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
 
-            <!-- Output Directory row -->
+            <!-- SQLite Output file row -->
             <Grid Margin="0,0,0,6">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="50"/>
+                    <ColumnDefinition Width="65"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="70"/>
                     <ColumnDefinition Width="60"/>
                     <ColumnDefinition Width="30"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="Output:" VerticalAlignment="Center"/>
-                <TextBox Grid.Column="1" x:Name="TxtOutputDir" Margin="0,0,4,0" VerticalContentAlignment="Center"/>
+                <TextBlock Grid.Column="0" Text="SQLite DB:" VerticalAlignment="Center"/>
+                <TextBox Grid.Column="1" x:Name="TxtOutputDir" Margin="0,0,4,0" VerticalContentAlignment="Center" ToolTip="Path to single SQLite database file (*.db)"/>
                 <Button Grid.Column="2" x:Name="BtnWorkspace" Content="Workspace" Margin="0,0,4,0" Click="OnWorkspaceClick"/>
                 <Button Grid.Column="3" x:Name="BtnDesktop" Content="Desktop" Margin="0,0,4,0" Click="OnDesktopClick"/>
-                <Button Grid.Column="4" x:Name="BtnBrowse" Content="…" Click="OnBrowseClick"/>
+                <Button Grid.Column="4" x:Name="BtnBrowse" Content="…" ToolTip="Select or create SQLite database file" Click="OnBrowseClick"/>
             </Grid>
 
             <!-- Master rate -->

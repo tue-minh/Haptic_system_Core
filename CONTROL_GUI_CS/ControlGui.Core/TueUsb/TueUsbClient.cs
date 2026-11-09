@@ -39,17 +39,31 @@ namespace ControlGui.Core.TueUsb
             {
                 ReadTimeout = readTimeoutMs,
                 WriteTimeout = writeTimeoutMs,
-                DtrEnable = true,
-                RtsEnable = true
+                DtrEnable = false,
+                RtsEnable = false,
+                Handshake = Handshake.None
             };
         }
 
         public bool IsOpen => _port.IsOpen;
         public int BytesToRead => _port.BytesToRead;
-        public void Open() => _port.Open();
+        public void Open()
+        {
+            _port.Open();
+            try
+            {
+                _port.DiscardInBuffer();
+                _port.DiscardOutBuffer();
+            }
+            catch { }
+        }
         public void Close() => _port.Close();
         public int Read(byte[] buffer, int offset, int count) => _port.Read(buffer, offset, count);
-        public void Write(byte[] buffer, int offset, int count) => _port.Write(buffer, offset, count);
+        public void Write(byte[] buffer, int offset, int count)
+        {
+            _port.Write(buffer, offset, count);
+            try { _port.BaseStream.Flush(); } catch { }
+        }
         public void DiscardInBuffer() => _port.DiscardInBuffer();
         public void Dispose() => _port.Dispose();
     }
@@ -131,6 +145,7 @@ namespace ControlGui.Core.TueUsb
                 if (!_transport.IsOpen)
                 {
                     _transport.Open();
+                    Thread.Sleep(50);
                 }
 
                 _parser.Reset();
@@ -170,6 +185,7 @@ namespace ControlGui.Core.TueUsb
                     throw new InvalidOperationException("TueUsbClient is not connected");
 
                 req.Seq = NextSeq();
+                req.Crc = null; // Recompute fresh CRC for the updated sequence number
                 OnTx?.Invoke(req);
 
                 if (Mock)
@@ -222,7 +238,7 @@ namespace ControlGui.Core.TueUsb
                                     continue;
                                 }
 
-                                if (completedFrame.CanId == req.CanId && completedFrame.Seq == req.Seq)
+                                if (completedFrame.Seq == req.Seq && (completedFrame.CanId == req.CanId || completedFrame.Type == FrameType.RespErr))
                                 {
                                     if (completedFrame.Type == FrameType.RespErr)
                                     {
@@ -243,6 +259,95 @@ namespace ControlGui.Core.TueUsb
                 }
 
                 throw new TimeoutException($"Transaction timed out after {timeout:F2}s for CanId 0x{req.CanId:X3}");
+            }
+        }
+
+        public (Frame first, Frame second) TransactDual(Frame req, double? timeoutSec = null)
+        {
+            double timeout = timeoutSec ?? TimeoutSeconds;
+
+            lock (_lock)
+            {
+                if (!_isConnected)
+                    throw new InvalidOperationException("TueUsbClient is not connected");
+
+                req.Seq = NextSeq();
+                req.Crc = null;
+                OnTx?.Invoke(req);
+
+                if (Mock)
+                {
+                    var mockResponses = SimulateMockResponse(req);
+                    foreach (var resp in mockResponses)
+                    {
+                        OnRx?.Invoke(resp);
+                    }
+                    if (mockResponses.Count >= 2)
+                    {
+                        return (mockResponses[0], mockResponses[1]);
+                    }
+                    throw new TimeoutException("Mock dual response generation failed");
+                }
+
+                if (_transport == null || !_transport.IsOpen)
+                    throw new InvalidOperationException("Serial transport is unavailable or closed");
+
+                _transport.DiscardInBuffer();
+                byte[] rawReq = req.ToBytes();
+                _transport.Write(rawReq, 0, rawReq.Length);
+
+                // Receive loop: collect 2 frames with matching seq
+                var sw = Stopwatch.StartNew();
+                byte[] rxBuf = new byte[64];
+                _parser.Reset();
+                var collected = new List<Frame>();
+
+                while (sw.Elapsed.TotalSeconds < timeout)
+                {
+                    int bytesAvailable = _transport.BytesToRead;
+                    if (bytesAvailable > 0)
+                    {
+                        int readCount = _transport.Read(rxBuf, 0, Math.Min(bytesAvailable, rxBuf.Length));
+                        for (int i = 0; i < readCount; i++)
+                        {
+                            var completedFrame = _parser.FeedByte(rxBuf[i]);
+                            if (completedFrame != null)
+                            {
+                                OnRx?.Invoke(completedFrame);
+                                if (completedFrame.Type == FrameType.Async)
+                                {
+                                    OnAsync?.Invoke(completedFrame);
+                                    continue;
+                                }
+
+                                if (completedFrame.Seq == req.Seq)
+                                {
+                                    if (completedFrame.Type == FrameType.RespErr)
+                                    {
+                                        ErrorCode errCode = completedFrame.Payload.Length > 0
+                                            ? (ErrorCode)completedFrame.Payload[0]
+                                            : ErrorCode.ErrInternal;
+                                        throw new TueUsbException(errCode);
+                                    }
+
+                                    collected.Add(completedFrame);
+                                    if (collected.Count >= 2)
+                                    {
+                                        Frame dyn = collected.Find(f => f.CanId == CanId.ServoFbDynamics) ?? collected[0];
+                                        Frame hlt = collected.Find(f => f.CanId == CanId.ServoFbHealth) ?? collected[1];
+                                        return (dyn, hlt);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        Thread.Sleep(1);
+                    }
+                }
+
+                throw new TimeoutException($"Dual transaction timed out (got {collected.Count}/2 frames) for CanId 0x{req.CanId:X3} SEQ={req.Seq}");
             }
         }
 
@@ -403,6 +508,29 @@ namespace ControlGui.Core.TueUsb
             {
                 res.Add(new Frame(FrameType.RespOk, id, p, seq));
             }
+            else if (id == CanId.ServoGetFb)
+            {
+                byte sid = p.Length > 0 ? p[0] : (byte)1;
+                short pos = _mockServoPos.TryGetValue(sid, out var val) ? val : (short)2048;
+
+                // Frame 1: Dynamics (0x410)
+                byte[] pDyn = new byte[8];
+                pDyn[0] = sid;
+                BinaryPrimitives.WriteInt16LittleEndian(pDyn.AsSpan(1, 2), pos);
+                BinaryPrimitives.WriteInt16LittleEndian(pDyn.AsSpan(3, 2), 0);
+                BinaryPrimitives.WriteInt16LittleEndian(pDyn.AsSpan(5, 2), 50);
+                pDyn[7] = 0;
+                res.Add(new Frame(FrameType.RespOk, CanId.ServoFbDynamics, pDyn, seq));
+
+                // Frame 2: Health (0x411)
+                byte[] pHlt = new byte[8];
+                pHlt[0] = sid;
+                pHlt[1] = 120; // 12.0V
+                pHlt[2] = 35;  // 35C
+                pHlt[3] = 0;   // Status OK
+                BinaryPrimitives.WriteInt16LittleEndian(pHlt.AsSpan(4, 2), 150); // 150mA
+                res.Add(new Frame(FrameType.RespOk, CanId.ServoFbHealth, pHlt, seq));
+            }
             else if (id == CanId.ServoFbDynamics)
             {
                 byte sid = p.Length > 0 ? p[0] : (byte)1;
@@ -539,14 +667,12 @@ namespace ControlGui.Core.TueUsb
                 Encoders.ServoTorque(sid, enable ? ServoTorque.On : ServoTorque.Off)));
         }
 
-        public ServoFeedback ServoGetFeedback(byte sid)
+        public ServoFeedback ServoGetFeedback(byte sid, double? timeoutSec = null)
         {
-            var respDyn = Transact(new Frame(FrameType.Req, CanId.ServoFbDynamics, Encoders.ServoGetFb(sid)));
-            var dyn = Decoders.ServoFbDynamics(respDyn.Payload);
-
-            var respHlth = Transact(new Frame(FrameType.Req, CanId.ServoFbHealth, Encoders.ServoGetFb(sid)));
-            var hlth = Decoders.ServoFbHealth(respHlth.Payload);
-
+            var req = new Frame(FrameType.Req, CanId.ServoGetFb, Encoders.ServoGetFb(sid));
+            var (fDyn, fHlt) = TransactDual(req, timeoutSec);
+            var dyn = Decoders.ServoFbDynamics(fDyn.Payload);
+            var hlth = Decoders.ServoFbHealth(fHlt.Payload);
             return new ServoFeedback(dyn, hlth);
         }
 

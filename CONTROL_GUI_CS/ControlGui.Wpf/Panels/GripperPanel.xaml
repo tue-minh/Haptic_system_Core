@@ -18,7 +18,7 @@
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Column="0" Text="Servo ID:" VerticalAlignment="Center"/>
-                <TextBox Grid.Column="1" x:Name="TxtServoId" Text="1" Margin="0,0,6,0" VerticalContentAlignment="Center"/>
+                <TextBox Grid.Column="1" x:Name="TxtServoId" Text="1" Margin="0,0,6,0" VerticalContentAlignment="Center" TextChanged="OnServoIdTextChanged"/>
                 <Button Grid.Column="2" x:Name="BtnScan" Content="Scan Servo" Margin="0,0,4,0" ToolTip="Scan bus for active STS3215 servo IDs (1..16)" Click="OnScanClick"/>
                 <Button Grid.Column="3" x:Name="BtnPing" Content="Ping" Margin="0,0,4,0" ToolTip="Ping current servo ID" Click="OnPingClick"/>
                 <TextBlock Grid.Column="4" x:Name="TxtServoStatus" Text="Offline" VerticalAlignment="Center" Foreground="#757575" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>

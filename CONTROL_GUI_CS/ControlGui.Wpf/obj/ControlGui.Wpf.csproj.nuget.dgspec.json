@@ -46,6 +46,10 @@
           "framework": "net8.0",
           "targetAlias": "net8.0",
           "dependencies": {
+            "Microsoft.Data.Sqlite": {
+              "target": "Package",
+              "version": "[10.0.14, )"
+            },
             "System.IO.Ports": {
               "target": "Package",
               "version": "[10.0.14, )"

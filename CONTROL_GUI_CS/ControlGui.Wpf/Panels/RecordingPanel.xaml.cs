@@ -21,12 +21,20 @@ namespace ControlGui.Wpf.Panels
         public RecordingPanel()
         {
             InitializeComponent();
-            TxtOutputDir.Text = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Unified_Control");
+            TxtOutputDir.Text = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Unified_Control", "recordings.db");
         }
 
         public void SetDefaultDirs(string workspaceDir)
         {
-            TxtOutputDir.Text = workspaceDir;
+            if (workspaceDir.EndsWith(".db", StringComparison.OrdinalIgnoreCase) ||
+                workspaceDir.EndsWith(".sqlite", StringComparison.OrdinalIgnoreCase))
+            {
+                TxtOutputDir.Text = workspaceDir;
+            }
+            else
+            {
+                TxtOutputDir.Text = Path.Combine(workspaceDir, "recordings.db");
+            }
         }
 
         private void OnToggleRecordClick(object sender, RoutedEventArgs e)
@@ -41,7 +49,7 @@ namespace ControlGui.Wpf.Panels
             }
         }
 
-        public void SetRecordingState(bool recording, double elapsedSeconds, long rows, string filePath)
+        public void SetRecordingState(bool recording, double elapsedSeconds, long rows, string dbPath, string currentTable)
         {
             _isRecording = recording;
 
@@ -50,44 +58,49 @@ namespace ControlGui.Wpf.Panels
                 BtnRecord.Content = "■  Stop Recording";
                 BtnRecord.Background = Theme.DangerBrush;
                 BtnRecord.Foreground = Brushes.White;
+                TxtFiles.Text = $"Active DB: {Path.GetFileName(dbPath)}  |  Table: [{currentTable}]";
+                TxtFiles.Foreground = Theme.SuccessBrush;
             }
             else
             {
                 BtnRecord.Content = "●  Start Recording";
                 BtnRecord.Background = Theme.PrimaryBrush;
                 BtnRecord.Foreground = Brushes.White;
+                TxtFiles.Text = $"Target SQLite DB: {Path.GetFileName(dbPath)} (idle)";
+                TxtFiles.Foreground = Theme.TextDimBrush;
             }
 
             TimeSpan ts = TimeSpan.FromSeconds(elapsedSeconds);
             TxtElapsed.Text = $"{ts.Hours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}";
             TxtRows.Text = $"Rows logged: {rows}";
-            TxtFiles.Text = string.IsNullOrEmpty(filePath) ? "No active recording" : Path.GetFileName(filePath);
         }
 
         private void OnWorkspaceClick(object sender, RoutedEventArgs e)
         {
-            string dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Unified_Control");
-            TxtOutputDir.Text = dir;
-            OutputDirChanged?.Invoke(dir);
+            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Unified_Control", "recordings.db");
+            TxtOutputDir.Text = path;
+            OutputDirChanged?.Invoke(path);
         }
 
         private void OnDesktopClick(object sender, RoutedEventArgs e)
         {
-            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "Unified_Control");
-            TxtOutputDir.Text = dir;
-            OutputDirChanged?.Invoke(dir);
+            string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "Unified_Control", "recordings.db");
+            TxtOutputDir.Text = path;
+            OutputDirChanged?.Invoke(path);
         }
 
         private void OnBrowseClick(object sender, RoutedEventArgs e)
         {
-            var dlg = new OpenFolderDialog
+            var dlg = new SaveFileDialog
             {
-                Title = "Select Recording Output Directory"
+                Title = "Select or Name SQLite Database File",
+                Filter = "SQLite Database (*.db)|*.db|SQLite 3 Database (*.sqlite)|*.sqlite|All Files (*.*)|*.*",
+                FileName = "recordings.db"
             };
             if (dlg.ShowDialog() == true)
             {
-                TxtOutputDir.Text = dlg.FolderName;
-                OutputDirChanged?.Invoke(dlg.FolderName);
+                TxtOutputDir.Text = dlg.FileName;
+                OutputDirChanged?.Invoke(dlg.FileName);
             }
         }
     }

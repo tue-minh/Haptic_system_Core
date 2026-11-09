@@ -28,9 +28,9 @@ namespace ControlGui.Wpf
         {
             InitializeComponent();
 
-            string defaultRecordDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Unified_Control");
-            _recorder = new RecordingManager(PostLog, defaultRecordDir);
-            PanelRecording.SetDefaultDirs(defaultRecordDir);
+            string defaultRecordPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Unified_Control", "recordings.db");
+            _recorder = new RecordingManager(PostLog, defaultRecordPath);
+            PanelRecording.SetDefaultDirs(defaultRecordPath);
 
             WireEvents();
 
@@ -42,7 +42,7 @@ namespace ControlGui.Wpf
             _timer.Start();
 
             PostLog("Control GUI initialized. Environment ready.");
-            PostLog($"Recordings will be written to: {defaultRecordDir}");
+            PostLog($"Telemetry will be exported to SQLite database: {defaultRecordPath}");
         }
 
         public void PostLog(string msg)
@@ -96,9 +96,6 @@ namespace ControlGui.Wpf
                     PanelStepper.Bind(_motor);
                     PanelGripper.Bind(_motor);
                     _motor.Start();
-
-                    // Start or attach haptic streamer
-                    RestartHapticStreamer();
                 }
                 else if (role == "sensor_l")
                 {
@@ -174,25 +171,31 @@ namespace ControlGui.Wpf
             OnDisconnectRole("sensor_r");
         }
 
-        private void RestartHapticStreamer()
+        private void SyncHapticStreamer(bool motorConnected)
         {
-            _hapticStreamer?.Stop();
-            _hapticStreamer?.Dispose();
-            _hapticStreamer = null;
+            bool want = PanelHaptic.IsStreamingEnabled && motorConnected && _motor != null;
 
-            if (PanelHaptic.IsStreamingEnabled && _motor != null)
+            if (want && _hapticStreamer == null)
             {
                 _hapticStreamer = new Stm32HapticStreamer(
                     writer: bytes => _motor?.WriteFrame(bytes) ?? 0,
                     log: PostLog
                 );
                 _hapticStreamer.Start();
+                PostLog("[haptic] Started 100 Hz haptic streaming on shared STM32 link");
+            }
+            else if (!want && _hapticStreamer != null)
+            {
+                _hapticStreamer.Stop();
+                _hapticStreamer.Dispose();
+                _hapticStreamer = null;
             }
         }
 
         private void OnHapticToggled(bool enabled)
         {
-            RestartHapticStreamer();
+            var snap = _motor?.Snapshot();
+            SyncHapticStreamer(snap != null && snap.Connected);
         }
 
         private void OnPingEsp32()
@@ -302,6 +305,7 @@ namespace ControlGui.Wpf
             }
 
             // 5. Update Haptic Streamer
+            SyncHapticStreamer(motorConnected);
             if (_hapticStreamer != null)
             {
                 _hapticStreamer.UpdateSensors(readingL, readingR);
@@ -318,7 +322,8 @@ namespace ControlGui.Wpf
                 _recorder.IsRecording,
                 _recorder.ElapsedSeconds,
                 _recorder.RowsLogged,
-                _recorder.CurrentFiles.Count > 0 ? _recorder.CurrentFiles[0] : ""
+                _recorder.DbPath,
+                _recorder.CurrentTable
             );
         }
 

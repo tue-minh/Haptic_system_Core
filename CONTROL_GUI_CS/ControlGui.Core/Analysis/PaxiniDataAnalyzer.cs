@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Microsoft.Data.Sqlite;
 
 namespace ControlGui.Core.Analysis
 {
@@ -24,8 +25,120 @@ namespace ControlGui.Core.Analysis
         public List<float[,]> TaxelFrames { get; set; } = new();
     }
 
+    public class RecordedSessionMeta
+    {
+        public string TableName { get; set; } = "";
+        public string CreatedAt { get; set; } = "";
+        public double SampleRateHz { get; set; }
+        public long RowCount { get; set; }
+        public double DurationSeconds { get; set; }
+        public string Meta { get; set; } = "";
+    }
+
     public static class PaxiniDataAnalyzer
     {
+        public static List<RecordedSessionMeta> GetSessionTables(string dbPath)
+        {
+            var sessions = new List<RecordedSessionMeta>();
+            if (!File.Exists(dbPath)) return sessions;
+
+            using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;");
+            conn.Open();
+
+            // Check if _recording_sessions exists
+            using var cmdCheck = conn.CreateCommand();
+            cmdCheck.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_recording_sessions';";
+            long hasCatalog = (long)(cmdCheck.ExecuteScalar() ?? 0);
+
+            if (hasCatalog > 0)
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT table_name, created_at, sample_rate_hz, row_count, duration_s, meta FROM _recording_sessions ORDER BY id DESC;";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    sessions.Add(new RecordedSessionMeta
+                    {
+                        TableName = reader.GetString(0),
+                        CreatedAt = reader.IsDBNull(1) ? "" : reader.GetString(1),
+                        SampleRateHz = reader.IsDBNull(2) ? 0.0 : reader.GetDouble(2),
+                        RowCount = reader.IsDBNull(3) ? 0 : reader.GetInt64(3),
+                        DurationSeconds = reader.IsDBNull(4) ? 0.0 : reader.GetDouble(4),
+                        Meta = reader.IsDBNull(5) ? "" : reader.GetString(5)
+                    });
+                }
+            }
+            else
+            {
+                // Fallback: list all tables starting with rec_
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'rec_%' ORDER BY name DESC;";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    sessions.Add(new RecordedSessionMeta
+                    {
+                        TableName = reader.GetString(0)
+                    });
+                }
+            }
+
+            return sessions;
+        }
+
+        public static (SensorSessionData left, SensorSessionData right) LoadSessionFromSqlite(string dbPath, string tableName)
+        {
+            var left = new SensorSessionData { FilePath = $"{dbPath} [{tableName}]", Tag = "Left" };
+            var right = new SensorSessionData { FilePath = $"{dbPath} [{tableName}]", Tag = "Right" };
+
+            if (!File.Exists(dbPath)) return (left, right);
+
+            using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;");
+            conn.Open();
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $@"
+                SELECT 
+                    t_rel_s,
+                    L_Fx_N, L_Fy_N, L_Fz_N, L_F_mag_N, L_F_shear_N, L_mu_Ft_over_Fz, L_CoP_x_mm, L_CoP_y_mm, L_contact_taxels,
+                    R_Fx_N, R_Fy_N, R_Fz_N, R_F_mag_N, R_F_shear_N, R_mu_Ft_over_Fz, R_CoP_x_mm, R_CoP_y_mm, R_contact_taxels
+                FROM [{tableName}]
+                ORDER BY row_id ASC;
+            ";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                double t = reader.IsDBNull(0) ? double.NaN : reader.GetDouble(0);
+
+                // Left
+                left.TimeRel.Add(t);
+                left.Fx.Add(reader.IsDBNull(1) ? double.NaN : reader.GetDouble(1));
+                left.Fy.Add(reader.IsDBNull(2) ? double.NaN : reader.GetDouble(2));
+                left.Fz.Add(reader.IsDBNull(3) ? double.NaN : reader.GetDouble(3));
+                left.FMag.Add(reader.IsDBNull(4) ? double.NaN : reader.GetDouble(4));
+                left.FShear.Add(reader.IsDBNull(5) ? double.NaN : reader.GetDouble(5));
+                left.Mu.Add(reader.IsDBNull(6) ? double.NaN : reader.GetDouble(6));
+                left.CopX.Add(reader.IsDBNull(7) ? double.NaN : reader.GetDouble(7));
+                left.CopY.Add(reader.IsDBNull(8) ? double.NaN : reader.GetDouble(8));
+                left.ContactTaxels.Add(reader.IsDBNull(9) ? double.NaN : reader.GetDouble(9));
+
+                // Right
+                right.TimeRel.Add(t);
+                right.Fx.Add(reader.IsDBNull(10) ? double.NaN : reader.GetDouble(10));
+                right.Fy.Add(reader.IsDBNull(11) ? double.NaN : reader.GetDouble(11));
+                right.Fz.Add(reader.IsDBNull(12) ? double.NaN : reader.GetDouble(12));
+                right.FMag.Add(reader.IsDBNull(13) ? double.NaN : reader.GetDouble(13));
+                right.FShear.Add(reader.IsDBNull(14) ? double.NaN : reader.GetDouble(14));
+                right.Mu.Add(reader.IsDBNull(15) ? double.NaN : reader.GetDouble(15));
+                right.CopX.Add(reader.IsDBNull(16) ? double.NaN : reader.GetDouble(16));
+                right.CopY.Add(reader.IsDBNull(17) ? double.NaN : reader.GetDouble(17));
+                right.ContactTaxels.Add(reader.IsDBNull(18) ? double.NaN : reader.GetDouble(18));
+            }
+
+            return (left, right);
+        }
+
         public static SensorSessionData LoadPerSensorCsv(string path)
         {
             var data = new SensorSessionData
@@ -101,7 +214,7 @@ namespace ControlGui.Core.Analysis
             double maxMuR = right.Mu.Count > 0 ? right.Mu.Where(v => !double.IsNaN(v)).DefaultIfEmpty(0).Max() : 0;
 
             sb.AppendLine($"[Left Sensor]");
-            sb.AppendLine($"  File: {Path.GetFileName(left.FilePath)}");
+            sb.AppendLine($"  Source: {Path.GetFileName(left.FilePath)}");
             sb.AppendLine($"  Frames: {left.TimeRel.Count}");
             sb.AppendLine($"  Peak Normal Force (Fz): {maxFzL:F2} N");
             sb.AppendLine($"  Peak Total Force (|F|): {maxMagL:F2} N");
@@ -109,7 +222,7 @@ namespace ControlGui.Core.Analysis
 
             sb.AppendLine();
             sb.AppendLine($"[Right Sensor]");
-            sb.AppendLine($"  File: {Path.GetFileName(right.FilePath)}");
+            sb.AppendLine($"  Source: {Path.GetFileName(right.FilePath)}");
             sb.AppendLine($"  Frames: {right.TimeRel.Count}");
             sb.AppendLine($"  Peak Normal Force (Fz): {maxFzR:F2} N");
             sb.AppendLine($"  Peak Total Force (|F|): {maxMagR:F2} N");

@@ -88,7 +88,14 @@ CONTROL_GUI_CS/
    - **Haptic Valve Map**: 5 pneumatic chambers (A/B/C underside pad Tip $\to$ Base, D/E flanks) colored by commanded force with raw wire bytes and age.
    - **Real-time 2D Force History**: High-speed scrolling curves ($Fz, Fx, Fy, |F|, Ft$) with direction filtering.
 
-5. **Integrated Mock Engine**:
+5. **Single-File SQLite Telemetry Export (Replaces CSV)**:
+   - All recordings are saved into a single SQLite database (`recordings.db`).
+   - Only 1 SQLite database file is created once on disk.
+   - Each recording session creates a new dedicated table named after the session timestamp (`rec_YYYYMMDD_HHMMSS`).
+   - High-throughput write engine: WAL mode, prepared statements, and batched transactions easily sustaining 100 Hz sampling across all 345 synchronized channels (Steppers XYZ, Gripper Pos/Volt, Left/Right forces, metrics, and all 52 taxels).
+   - Session catalog table `_recording_sessions` logs start time, duration, sample rate, row count, and metadata for fast offline queries.
+
+6. **Integrated Mock Engine**:
    - Select `MOCK_PORT` in the connection panel to run full simulation without physical hardware attached.
 
 ---

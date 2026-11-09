@@ -23,7 +23,7 @@ namespace ControlGui.Core.TueUsb
                 throw new ArgumentException($"Payload length {Payload.Length} exceeds maximum DLC {FramingConstants.MaxDlc}");
             }
             Seq = seq;
-            Crc = crc ?? ComputeCrc();
+            Crc = crc;
         }
 
         public byte ComputeCrc()
@@ -49,6 +49,7 @@ namespace ControlGui.Core.TueUsb
         public byte[] ToBytes()
         {
             byte crcVal = Crc ?? ComputeCrc();
+            Crc = crcVal;
             int totalLen = FramingConstants.FrameOverhead + Dlc;
             byte[] result = new byte[totalLen];
 

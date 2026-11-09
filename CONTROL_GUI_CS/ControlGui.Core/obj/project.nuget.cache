@@ -1,9 +1,11 @@
 {
   "version": 2,
-  "dgSpecHash": "tWX2KQtDdP0=",
+  "dgSpecHash": "eO6eiqi8o0Q=",
   "success": true,
   "projectFilePath": "c:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj",
   "expectedPackageFiles": [
+    "C:\\Users\\nguye\\.nuget\\packages\\microsoft.data.sqlite\\10.0.14\\microsoft.data.sqlite.10.0.14.nupkg.sha512",
+    "C:\\Users\\nguye\\.nuget\\packages\\microsoft.data.sqlite.core\\10.0.14\\microsoft.data.sqlite.core.10.0.14.nupkg.sha512",
     "C:\\Users\\nguye\\.nuget\\packages\\runtime.android-arm.runtime.native.system.io.ports\\10.0.14\\runtime.android-arm.runtime.native.system.io.ports.10.0.14.nupkg.sha512",
     "C:\\Users\\nguye\\.nuget\\packages\\runtime.android-arm64.runtime.native.system.io.ports\\10.0.14\\runtime.android-arm64.runtime.native.system.io.ports.10.0.14.nupkg.sha512",
     "C:\\Users\\nguye\\.nuget\\packages\\runtime.android-x64.runtime.native.system.io.ports\\10.0.14\\runtime.android-x64.runtime.native.system.io.ports.10.0.14.nupkg.sha512",
@@ -21,7 +23,12 @@
     "C:\\Users\\nguye\\.nuget\\packages\\runtime.native.system.io.ports\\10.0.14\\runtime.native.system.io.ports.10.0.14.nupkg.sha512",
     "C:\\Users\\nguye\\.nuget\\packages\\runtime.osx-arm64.runtime.native.system.io.ports\\10.0.14\\runtime.osx-arm64.runtime.native.system.io.ports.10.0.14.nupkg.sha512",
     "C:\\Users\\nguye\\.nuget\\packages\\runtime.osx-x64.runtime.native.system.io.ports\\10.0.14\\runtime.osx-x64.runtime.native.system.io.ports.10.0.14.nupkg.sha512",
+    "C:\\Users\\nguye\\.nuget\\packages\\sqlitepclraw.bundle_e_sqlite3\\2.1.13\\sqlitepclraw.bundle_e_sqlite3.2.1.13.nupkg.sha512",
+    "C:\\Users\\nguye\\.nuget\\packages\\sqlitepclraw.core\\2.1.13\\sqlitepclraw.core.2.1.13.nupkg.sha512",
+    "C:\\Users\\nguye\\.nuget\\packages\\sqlitepclraw.lib.e_sqlite3\\2.1.13\\sqlitepclraw.lib.e_sqlite3.2.1.13.nupkg.sha512",
+    "C:\\Users\\nguye\\.nuget\\packages\\sqlitepclraw.provider.e_sqlite3\\2.1.13\\sqlitepclraw.provider.e_sqlite3.2.1.13.nupkg.sha512",
     "C:\\Users\\nguye\\.nuget\\packages\\system.io.ports\\10.0.14\\system.io.ports.10.0.14.nupkg.sha512",
+    "C:\\Users\\nguye\\.nuget\\packages\\system.memory\\4.5.3\\system.memory.4.5.3.nupkg.sha512",
     "C:\\Users\\nguye\\.nuget\\packages\\microsoft.netcore.app.ref\\8.0.33\\microsoft.netcore.app.ref.8.0.33.nupkg.sha512",
     "C:\\Users\\nguye\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\8.0.33\\microsoft.windowsdesktop.app.ref.8.0.33.nupkg.sha512",
     "C:\\Users\\nguye\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\8.0.33\\microsoft.aspnetcore.app.ref.8.0.33.nupkg.sha512"

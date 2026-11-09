@@ -44,6 +44,23 @@ namespace ControlGui.Tests
         }
 
         [TestMethod]
+        public void TestFrameSequenceMutationUpdatesCrc()
+        {
+            var frame = new Frame(FrameType.Req, CanId.SysPing, new byte[] { 1, 2, 3, 4 }, seq: 0);
+            byte[] bytesSeq0 = frame.ToBytes();
+
+            frame.Seq = 17;
+            frame.Crc = null;
+            byte[] bytesSeq17 = frame.ToBytes();
+
+            Assert.AreNotEqual(bytesSeq0[^3], bytesSeq17[^3], "CRC must be different when sequence number changes");
+
+            var parsed = Frame.FromBytes(bytesSeq17);
+            Assert.AreEqual((byte)17, parsed.Seq);
+            Assert.IsTrue(parsed.IsCrcValid(), "Mutated frame must produce valid wire CRC");
+        }
+
+        [TestMethod]
         public void TestFrameParserStreamingBytes()
         {
             var parser = new FrameParser();
@@ -272,6 +289,73 @@ namespace ControlGui.Tests
             }
             finally
             {
+                try { Directory.Delete(testDir, true); } catch { }
+            }
+        }
+
+        [TestMethod]
+        public void TestSqliteRecorderMultipleSessionsSingleDatabase()
+        {
+            string testDir = Path.Combine(Path.GetTempPath(), "ControlGuiTests_Sqlite_" + Guid.NewGuid());
+            Directory.CreateDirectory(testDir);
+            string dbPath = Path.Combine(testDir, "recordings.db");
+
+            try
+            {
+                Func<List<double>> sampleFn = () =>
+                {
+                    var list = new List<double>();
+                    // 5 lead values (X, Y, Z, pos, volt)
+                    list.AddRange(new double[] { 10.0, 20.0, 30.0, 100, 12.0 });
+                    // Left block (13 metrics + 156 taxels)
+                    for (int i = 0; i < 169; i++) list.Add(i * 0.1);
+                    // Right block (13 metrics + 156 taxels)
+                    for (int i = 0; i < 169; i++) list.Add(i * 0.2);
+                    return list;
+                };
+
+                // Session 1: export at timestamp 1
+                string table1 = "rec_20261109_120000";
+                using (var rec1 = new SqliteRecorder(dbPath, table1, 0.0, sampleFn, rateHz: 50.0, meta: "First Test Session"))
+                {
+                    Thread.Sleep(120);
+                    long rows1 = rec1.Stop();
+                    Assert.IsTrue(rows1 > 0, "Session 1 should log rows");
+                }
+
+                Assert.IsTrue(File.Exists(dbPath), "Single SQLite database file must exist");
+
+                // Session 2: export at timestamp 2 into the SAME SQLite database
+                string table2 = "rec_20261109_120500";
+                using (var rec2 = new SqliteRecorder(dbPath, table2, 0.0, sampleFn, rateHz: 50.0, meta: "Second Test Session"))
+                {
+                    Thread.Sleep(120);
+                    long rows2 = rec2.Stop();
+                    Assert.IsTrue(rows2 > 0, "Session 2 should log rows");
+                }
+
+                // Verify only ONE database file exists in directory (plus WAL/SHM temporary files while active)
+                var dbFiles = Directory.GetFiles(testDir, "*.db");
+                Assert.AreEqual(1, dbFiles.Length, "Exactly 1 SQLite database file should be created");
+
+                // Verify catalog has 2 sessions
+                var sessions = PaxiniDataAnalyzer.GetSessionTables(dbPath);
+                Assert.AreEqual(2, sessions.Count, "Database should contain exactly 2 recorded session tables");
+                Assert.AreEqual(table2, sessions[0].TableName);
+                Assert.AreEqual(table1, sessions[1].TableName);
+
+                // Verify loading data from SQLite
+                var (left, right) = PaxiniDataAnalyzer.LoadSessionFromSqlite(dbPath, table1);
+                Assert.IsTrue(left.TimeRel.Count > 0, "Left sensor should load rows from SQLite table");
+                Assert.IsTrue(right.TimeRel.Count > 0, "Right sensor should load rows from SQLite table");
+                Assert.IsFalse(double.IsNaN(left.Fz[0]));
+            }
+            finally
+            {
+                // Force SQLite connection cleanup before deleting directory
+                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
                 try { Directory.Delete(testDir, true); } catch { }
             }
         }

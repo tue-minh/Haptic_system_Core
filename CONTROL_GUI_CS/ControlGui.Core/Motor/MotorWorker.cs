@@ -179,7 +179,8 @@ namespace ControlGui.Core.Motor
                 foreach (byte sid in order)
                 {
                     if (_cts.Token.IsCancellationRequested || !_urgentQueue.IsEmpty) break;
-                    if (c.ServoPing(sid, 0.06))
+                    Thread.Sleep(5);
+                    if (c.ServoPing(sid, 0.08))
                     {
                         foundId = sid;
                         break;
@@ -196,6 +197,7 @@ namespace ControlGui.Core.Motor
 
                     try
                     {
+                        Thread.Sleep(5);
                         var fb = c.ServoGetFeedback(foundId.Value);
                         Update(s => s with
                         {
@@ -238,7 +240,9 @@ namespace ControlGui.Core.Motor
             Update(s => s with { ServoScanning = true, ServoStatusMsg = $"Pinging ID {targetId}..." });
             _commandQueue.Enqueue(c =>
             {
-                bool ok = c.ServoPing(targetId, 0.12);
+                _log($"[motor {Port}] Pinging servo ID {targetId}...");
+                Thread.Sleep(5);
+                bool ok = c.ServoPing(targetId, 0.15);
                 if (ok)
                 {
                     _servoId = targetId;
@@ -249,6 +253,7 @@ namespace ControlGui.Core.Motor
 
                     try
                     {
+                        Thread.Sleep(5);
                         var fb = c.ServoGetFeedback(targetId);
                         Update(s => s with
                         {
@@ -288,10 +293,33 @@ namespace ControlGui.Core.Motor
         public void ServoMove(int pos, int speed = 800, int accel = 30, byte? sid = null)
         {
             byte targetId = sid ?? _servoId;
+            pos = Math.Clamp(pos, MotorConstants.GripperPosMin, MotorConstants.GripperPosMax);
+            speed = Math.Clamp(speed, MotorConstants.GripperSpeedMin, MotorConstants.GripperSpeedMax);
+            accel = Math.Clamp(accel, MotorConstants.GripperAccelMin, MotorConstants.GripperAccelMax);
+
             _commandQueue.Enqueue(c =>
             {
-                c.ServoTorqueEnable(targetId, true);
+                _log($"[motor {Port}] ServoMove(id={targetId}, pos={pos}, speed={speed}, accel={accel})");
+
+                // Small inter-transaction pause for half-duplex bus settle
+                Thread.Sleep(5);
+
+                // Ensure torque is enabled
+                try
+                {
+                    c.ServoTorqueEnable(targetId, true);
+                }
+                catch (Exception ex)
+                {
+                    _log($"[motor {Port}] ServoTorqueEnable notice: {ex.Message}");
+                }
+
+                // Inter-frame delay for STS3215 internal write digestion
+                Thread.Sleep(5);
+
+                // Send goal position
                 c.ServoSetPos(targetId, pos, speed, accel);
+                _log($"[motor {Port}] ServoMove -> OK (pos={pos})");
             });
             _wakeEvent.Set();
         }
@@ -299,7 +327,12 @@ namespace ControlGui.Core.Motor
         public void ServoTorque(bool on, byte? sid = null)
         {
             byte targetId = sid ?? _servoId;
-            _commandQueue.Enqueue(c => c.ServoTorqueEnable(targetId, on));
+            _commandQueue.Enqueue(c =>
+            {
+                _log($"[motor {Port}] ServoTorque(id={targetId}, on={on})");
+                Thread.Sleep(5);
+                c.ServoTorqueEnable(targetId, on);
+            });
             _wakeEvent.Set();
         }
 
@@ -349,6 +382,7 @@ namespace ControlGui.Core.Motor
         {
             try
             {
+                _log($"[motor {Port}] Opening serial port @ {BaudRate} baud...");
                 _client = OpenClient();
                 if (!Handshake())
                 {
@@ -377,6 +411,7 @@ namespace ControlGui.Core.Motor
                 client.SetCustomTransport(lockedTransport);
             }
             client.Connect();
+            _log($"[motor {Port}] Port handle opened successfully.");
             return client;
         }
 
@@ -385,7 +420,31 @@ namespace ControlGui.Core.Motor
             var c = _client!;
             _log($"[motor {Port}] Handshake: Ping / GetInfo / StepGetConfig");
 
-            c.Ping();
+            Exception? lastEx = null;
+            bool pingOk = false;
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                try
+                {
+                    _log($"[motor {Port}] Sending SYS_PING (attempt {attempt}/3)...");
+                    c.Ping();
+                    pingOk = true;
+                    _log($"[motor {Port}] SYS_PING response OK");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                    _log($"[motor {Port}] SYS_PING attempt {attempt} failed: {ex.Message}");
+                    Thread.Sleep(60);
+                }
+            }
+
+            if (!pingOk)
+            {
+                throw lastEx ?? new TimeoutException("MCU did not respond to SYS_PING");
+            }
+
             var info = c.GetInfo();
             var cfg = c.StepGetConfig();
 
@@ -407,15 +466,18 @@ namespace ControlGui.Core.Motor
             // Initial probe of servo
             try
             {
-                if (c.ServoPing(_servoId, 0.08))
+                Thread.Sleep(20);
+                if (c.ServoPing(_servoId, 0.12))
                 {
                     _servoOnline = true;
                     _log($"[motor {Port}] Servo ID {_servoId}: ONLINE");
                     try
                     {
+                        Thread.Sleep(5);
                         var fb = c.ServoGetFeedback(_servoId);
                         Update(s => s with
                         {
+                            ServoId = _servoId,
                             ServoOnline = true,
                             ServoStatusMsg = $"Servo ID {_servoId}: Online",
                             ServoPos = fb.Dynamics.Position,
@@ -427,7 +489,7 @@ namespace ControlGui.Core.Motor
                     }
                     catch
                     {
-                        Update(s => s with { ServoOnline = true, ServoStatusMsg = $"Servo ID {_servoId}: Online" });
+                        Update(s => s with { ServoId = _servoId, ServoOnline = true, ServoStatusMsg = $"Servo ID {_servoId}: Online" });
                     }
                 }
                 else
