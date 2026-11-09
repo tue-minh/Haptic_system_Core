@@ -120,6 +120,16 @@ class CanId(IntEnum):
     SERVO_SET_ID = 0x414
     SERVO_RESET = 0x415
 
+    # --- DC Motors / DRV8872 (0x600 - 0x607) ---
+    DC_GET_INFO = 0x600
+    DC_SET_SPEED = 0x601
+    DC_GET_STATUS = 0x602
+    DC_SET_SPEED_ALL = 0x603
+    DC_BRAKE = 0x604
+    DC_COAST = 0x605
+    DC_GET_FAULTS = 0x606
+    DC_CONFIG_FREQ = 0x607
+
     # --- User custom range (host streams, firmware forwards to UART slave) ---
     HAPTIC_TELEMETRY = 0x300
     HAPTIC_PING = 0x301
@@ -159,6 +169,14 @@ class ServoAlarmBit(IntFlag):
     CURRENT = 0x08      # Overcurrent alarm
     ANGLE = 0x10        # Target position beyond software limits
     OVERLOAD = 0x20     # Mechanical overload stall
+
+
+class DcMode(IntEnum):
+    """DC Motor DRV8872 operating modes."""
+    COAST = 0    # Both inputs LOW (Hi-Z coast / low power sleep)
+    FORWARD = 1  # Forward rotation (IN1=PWM, IN2=0)
+    REVERSE = 2  # Reverse rotation (IN1=0, IN2=PWM)
+    BRAKE = 3    # Active brake (IN1=1, IN2=1)
 
 
 def is_reserved_can_id(can_id: int) -> bool:

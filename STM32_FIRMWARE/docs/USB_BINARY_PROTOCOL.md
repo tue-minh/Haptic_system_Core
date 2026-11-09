@@ -106,7 +106,7 @@ against the reference vector.
 | `0x300 – 0x3FF` | **RESERVED — user custom** (`0x300` = haptic telemetry) |
 | `0x400 – 0x4FF` | STS3215 bus servos (SERVO) |
 | `0x500 – 0x57F` | Sensors & inputs (reserved) |
-| `0x600 – 0x6FF` | DC motors / actuators (reserved) |
+| `0x600 – 0x6FF` | DC motors / DRV8872 (DC) |
 
 ### 5.1 Haptic telemetry stream (`0x300`)
 
@@ -235,6 +235,23 @@ the request `SEQ`:
 
 The `status` byte carries the hardware fault bitmask (`0x01` voltage, `0x02`
 sensor, `0x04` temperature, `0x08` current, `0x10` angle, `0x20` overload).
+
+### 6.5 DC Motors / DRV8872 (`0x600 – 0x607`)
+
+| ID | Name | Req DLC | Request | Resp DLC | Response |
+|:--:|:--|:--:|:--|:--:|:--|
+| `0x600` | `DC_GET_INFO` | 0 | — | 8 | `motor_count u8, pwm_khz u8, max_duty u16, arr u16, driver_type u16` |
+| `0x601` | `DC_SET_SPEED` | 3 | `motor_id u8 (1..4), speed i16 (-1000..1000)` | 4 | `motor_id u8, speed i16, fault u8` |
+| `0x602` | `DC_GET_STATUS` | 1 | `motor_id u8 (1..4)` | 6 | `motor_id u8, mode u8, speed i16, fault u8, latched u8` |
+| `0x603` | `DC_SET_SPEED_ALL`| 8 | `m1 i16, m2 i16, m3 i16, m4 i16` | 5 | `fault_mask u8, m1_mode u8, m2_mode u8, m3_mode u8, m4_mode u8` |
+| `0x604` | `DC_BRAKE` | 1 | `motor_id u8 (1..4 or 0xFF=all)` | 2 | `motor_id u8, mode u8 (3=BRAKE)` |
+| `0x605` | `DC_COAST` | 1 | `motor_id u8 (1..4 or 0xFF=all)` | 2 | `motor_id u8, mode u8 (0=COAST)` |
+| `0x606` | `DC_GET_FAULTS` | 0 | — | 5 | `mask u8, f1 u8, f2 u8, f3 u8, f4 u8` |
+| `0x607` | `DC_CONFIG_FREQ` | 2 | `freq_khz u16 (1..50)` | 4 | `actual_freq_hz u32` |
+
+`DC_SET_SPEED` speed scale is signed per-mille (`-1000` to `+1000`, 0.1% resolution).
+`DC_BRAKE` sets inputs high (`IN1=1, IN2=1`). `DC_COAST` sets inputs low (`IN1=0, IN2=0`).
+`DC_GET_FAULTS` reads the active-low hardware `nFAULT` pins (`DC_F1` to `DC_F4`).
 
 ---
 

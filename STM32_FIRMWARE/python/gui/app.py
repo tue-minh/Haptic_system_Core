@@ -108,6 +108,7 @@ class TueUsbApp(QMainWindow):
         self.tabs.addTab(self._build_stepper_tab(), "Stepper (CoreXY + Z)")
         self.tabs.addTab(self._build_raw_stepper_tab(), "Raw Stepper")
         self.tabs.addTab(self._build_servo_tab(), "Servo (STS3215)")
+        self.tabs.addTab(self._build_dc_tab(), "DC Motors (DRV8872)")
         root.addWidget(self.tabs)
 
         self.status = QStatusBar()
@@ -438,6 +439,64 @@ class TueUsbApp(QMainWindow):
         cg.setColumnStretch(5, 1)
 
         fbox, self.log_servo = self._feedback_box("SERVO Feedback")
+        return self._assemble_tab([pbox, cbox], fbox)
+
+    # ==================================================================
+    # Tab: DC Motors (0x600-0x607)
+    # ==================================================================
+
+    def _build_dc_tab(self) -> QWidget:
+        pbox, pg = self._grid_box("Parameters")
+        pg.addWidget(QLabel("Target Channel (1..4):"), 0, 0)
+        self.spn_dc_id = self._spin(1, 4, 1, 80)
+        pg.addWidget(self.spn_dc_id, 0, 1)
+
+        pg.addWidget(QLabel("Speed (-1000..+1000):"), 0, 2)
+        self.spn_dc_spd = self._spin(-1000, 1000, 500, 100)
+        pg.addWidget(self.spn_dc_spd, 0, 3)
+
+        pg.addWidget(QLabel("PWM Freq (kHz):"), 0, 4)
+        self.spn_dc_freq = self._spin(1, 50, 20, 80)
+        pg.addWidget(self.spn_dc_freq, 0, 5)
+
+        pg.addWidget(QLabel("M1 Speed:"), 1, 0)
+        self.spn_dc_m1 = self._spin(-1000, 1000, 300, 80)
+        pg.addWidget(self.spn_dc_m1, 1, 1)
+
+        pg.addWidget(QLabel("M2 Speed:"), 1, 2)
+        self.spn_dc_m2 = self._spin(-1000, 1000, -300, 80)
+        pg.addWidget(self.spn_dc_m2, 1, 3)
+
+        pg.addWidget(QLabel("M3 Speed:"), 1, 4)
+        self.spn_dc_m3 = self._spin(-1000, 1000, 500, 80)
+        pg.addWidget(self.spn_dc_m3, 1, 5)
+
+        pg.addWidget(QLabel("M4 Speed:"), 1, 6)
+        self.spn_dc_m4 = self._spin(-1000, 1000, -500, 80)
+        pg.addWidget(self.spn_dc_m4, 1, 7)
+
+        cbox, cg = self._grid_box("Commands")
+        r = 0
+        self._cmd_row(cg, r, "0x600 DC_GET_INFO", [("Query info", self._do_dc_info)]); r += 1
+        self._cmd_row(cg, r, "0x601 DC_SET_SPEED", [
+            ("Set speed", self._do_dc_set_speed),
+            ("Stop (0)", self._do_dc_set_speed_zero),
+        ]); r += 1
+        self._cmd_row(cg, r, "0x602 DC_GET_STATUS", [("Read status", self._do_dc_get_status)]); r += 1
+        self._cmd_row(cg, r, "0x603 DC_SET_SPEED_ALL", [("Set all 4 motors", self._do_dc_set_speed_all)]); r += 1
+        self._cmd_row(cg, r, "0x604 DC_BRAKE", [
+            ("Brake channel", self._do_dc_brake_channel),
+            ("Brake all", self._do_dc_brake_all),
+        ]); r += 1
+        self._cmd_row(cg, r, "0x605 DC_COAST", [
+            ("Coast channel", self._do_dc_coast_channel),
+            ("Coast all", self._do_dc_coast_all),
+        ]); r += 1
+        self._cmd_row(cg, r, "0x606 DC_GET_FAULTS", [("Read faults", self._do_dc_get_faults)]); r += 1
+        self._cmd_row(cg, r, "0x607 DC_CONFIG_FREQ", [("Set frequency", self._do_dc_config_freq)]); r += 1
+        cg.setColumnStretch(5, 1)
+
+        fbox, self.log_dc = self._feedback_box("DC Motor Feedback")
         return self._assemble_tab([pbox, cbox], fbox)
 
     # ==================================================================
@@ -803,6 +862,94 @@ class TueUsbApp(QMainWindow):
         sid = self.spn_servo_id.value()
         self._run(self.log_servo, f"0x415 SERVO_RESET({sid})", lambda: self.client.servo_reset(sid),
                   lambda status: f"status={status}")
+
+    # ==================================================================
+    # DC Motor command handlers
+    # ==================================================================
+
+    def _do_dc_info(self):
+        self._run(self.log_dc, "0x600 DC_GET_INFO", self.client.dc_get_info)
+
+    def _do_dc_set_speed(self):
+        m_id = self.spn_dc_id.value()
+        spd = self.spn_dc_spd.value()
+        self._run(
+            self.log_dc,
+            f"0x601 DC_SET_SPEED M{m_id}",
+            lambda: self.client.dc_set_speed(m_id, spd),
+            lambda v: f"motor={v[0]} speed={v[1]} fault={'ACTIVE' if v[2] else 'OK'}",
+        )
+
+    def _do_dc_set_speed_zero(self):
+        m_id = self.spn_dc_id.value()
+        self._run(
+            self.log_dc,
+            f"0x601 DC_SET_SPEED M{m_id} -> 0",
+            lambda: self.client.dc_set_speed(m_id, 0),
+            lambda v: f"motor={v[0]} speed={v[1]} fault={'ACTIVE' if v[2] else 'OK'}",
+        )
+
+    def _do_dc_get_status(self):
+        m_id = self.spn_dc_id.value()
+        self._run(self.log_dc, f"0x602 DC_GET_STATUS M{m_id}", lambda: self.client.dc_get_status(m_id))
+
+    def _do_dc_set_speed_all(self):
+        m1 = self.spn_dc_m1.value()
+        m2 = self.spn_dc_m2.value()
+        m3 = self.spn_dc_m3.value()
+        m4 = self.spn_dc_m4.value()
+        self._run(
+            self.log_dc,
+            "0x603 DC_SET_SPEED_ALL",
+            lambda: self.client.dc_set_speed_all(m1, m2, m3, m4),
+            lambda v: f"fault_mask=0x{v[0]:02X} modes=[{v[1].name}, {v[2].name}, {v[3].name}, {v[4].name}]",
+        )
+
+    def _do_dc_brake_channel(self):
+        m_id = self.spn_dc_id.value()
+        self._run(
+            self.log_dc,
+            f"0x604 DC_BRAKE M{m_id}",
+            lambda: self.client.dc_brake(m_id),
+            lambda v: f"motor={v[0]} mode={v[1].name}",
+        )
+
+    def _do_dc_brake_all(self):
+        self._run(
+            self.log_dc,
+            "0x604 DC_BRAKE ALL",
+            lambda: self.client.dc_brake(0xFF),
+            lambda v: f"motor=ALL mode={v[1].name}",
+        )
+
+    def _do_dc_coast_channel(self):
+        m_id = self.spn_dc_id.value()
+        self._run(
+            self.log_dc,
+            f"0x605 DC_COAST M{m_id}",
+            lambda: self.client.dc_coast(m_id),
+            lambda v: f"motor={v[0]} mode={v[1].name}",
+        )
+
+    def _do_dc_coast_all(self):
+        self._run(
+            self.log_dc,
+            "0x605 DC_COAST ALL",
+            lambda: self.client.dc_coast(0xFF),
+            lambda v: f"motor=ALL mode={v[1].name}",
+        )
+
+    def _do_dc_get_faults(self):
+        self._run(self.log_dc, "0x606 DC_GET_FAULTS", self.client.dc_get_faults)
+
+    def _do_dc_config_freq(self):
+        khz = self.spn_dc_freq.value()
+        self._run(
+            self.log_dc,
+            f"0x607 DC_CONFIG_FREQ {khz}kHz",
+            lambda: self.client.dc_set_frequency(khz),
+            lambda hz: f"actual_frequency={hz} Hz ({hz / 1000.0:.1f} kHz)",
+        )
 
 
 def run_app() -> int:

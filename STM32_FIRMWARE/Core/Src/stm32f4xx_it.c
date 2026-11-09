@@ -339,4 +339,22 @@ void DMA2_Stream7_IRQHandler(void)
 
 /* USER CODE BEGIN 1 */
 
+/**
+  * @brief This function handles EXTI Line[9:5] interrupts (DC_F1 on PD8, DC_F2 on PD9).
+  */
+void EXTI9_5_IRQHandler(void)
+{
+  HAL_GPIO_EXTI_IRQHandler(DC_F1_Pin);
+  HAL_GPIO_EXTI_IRQHandler(DC_F2_Pin);
+}
+
+/**
+  * @brief This function handles EXTI Line[15:10] interrupts (DC_F3 on PD10, DC_F4 on PD11).
+  */
+void EXTI15_10_IRQHandler(void)
+{
+  HAL_GPIO_EXTI_IRQHandler(DC_F3_Pin);
+  HAL_GPIO_EXTI_IRQHandler(DC_F4_Pin);
+}
+
 /* USER CODE END 1 */

@@ -56,8 +56,7 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOE, LED_MCU_Pin|SPI1_CS3_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, STEP_DIR4_Pin|STEP_DIR3_Pin|STEP_DIR2_Pin|STEP_DIR1_Pin
-                          |STEP_ENABLE_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, STEP_DIR3_Pin|STEP_DIR2_Pin|STEP_DIR1_Pin|STEP_ENABLE_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, SPI3_CS1_Pin|SPI3_CS2_Pin|SPI3_CS1D4_Pin, GPIO_PIN_RESET);
@@ -72,10 +71,8 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : STEP_DIR4_Pin STEP_DIR3_Pin STEP_DIR2_Pin STEP_DIR1_Pin
-                           STEP_ENABLE_Pin */
-  GPIO_InitStruct.Pin = STEP_DIR4_Pin|STEP_DIR3_Pin|STEP_DIR2_Pin|STEP_DIR1_Pin
-                          |STEP_ENABLE_Pin;
+  /*Configure GPIO pins : STEP_DIR3_Pin STEP_DIR2_Pin STEP_DIR1_Pin STEP_ENABLE_Pin */
+  GPIO_InitStruct.Pin = STEP_DIR3_Pin|STEP_DIR2_Pin|STEP_DIR1_Pin|STEP_ENABLE_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -83,9 +80,16 @@ void MX_GPIO_Init(void)
 
   /*Configure GPIO pins : DC_F1_Pin DC_F2_Pin DC_F3_Pin DC_F4_Pin */
   GPIO_InitStruct.Pin = DC_F1_Pin|DC_F2_Pin|DC_F3_Pin|DC_F4_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /* EXTI interrupt init for DC fault lines */
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
   /*Configure GPIO pins : SPI3_CS1_Pin SPI3_CS2_Pin SPI3_CS1D4_Pin */
   GPIO_InitStruct.Pin = SPI3_CS1_Pin|SPI3_CS2_Pin|SPI3_CS1D4_Pin;

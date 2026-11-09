@@ -30,7 +30,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "tue_stepper.h"
+#include "tue_dc.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -100,15 +101,18 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   MX_USART1_UART_Init();
-  MX_CAN1_Init();
-  MX_I2C1_Init();
-  MX_SPI3_Init();
+  // MX_CAN1_Init();
+  // MX_I2C1_Init();
+  // MX_SPI3_Init();
   MX_USART2_UART_Init();
-  MX_SPI1_Init();
+  // MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
   /* Steppers: TIM1 becomes the 1 us step clock and the STEP pins are turned
    * into plain GPIO outputs. See docs/STEPPER_INSTRUCTION.md. */
   tue_stepper_init();
+
+  /* DC Motors: 4 channels on TIM3 & TIM4 with DRV8872. */
+  tue_dc_init();
 
   /* USER CODE END 2 */
 
@@ -116,8 +120,9 @@ int main(void)
   osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
   MX_FREERTOS_Init();
 
-  /* Start scheduler */
+//   /* Start scheduler */
   osKernelStart();
+
 
   /* We should never get here as control is now taken by the scheduler */
 
@@ -178,7 +183,15 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+/**
+  * @brief  EXTI line detection callbacks for DC motor DRV8872 fault pins.
+  * @param  GPIO_Pin: Specifies the pins connected to the EXTI line.
+  * @retval None
+  */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  tue_dc_on_fault_exti(GPIO_Pin);
+}
 /* USER CODE END 4 */
 
 /**
@@ -202,6 +215,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   /* TIM1 update interrupt = one master step (returns immediately otherwise). */
   tue_stepper_on_timer_elapsed(htim);
 
+  /* TIM3 & TIM4 update interrupt for DC motor control & ramping */
+  tue_dc_on_timer_elapsed(htim);
+
   /* USER CODE END Callback 1 */
 }
 
@@ -216,6 +232,8 @@ void Error_Handler(void)
   __disable_irq();
   while (1)
   {
+    HAL_GPIO_TogglePin(LED_MCU_GPIO_Port, LED_MCU_Pin);
+    HAL_Delay(20);
   }
   /* USER CODE END Error_Handler_Debug */
 }

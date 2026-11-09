@@ -59,8 +59,6 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define LED_MCU_Pin GPIO_PIN_5
 #define LED_MCU_GPIO_Port GPIOE
-#define STEP_DIR4_Pin GPIO_PIN_0
-#define STEP_DIR4_GPIO_Port GPIOC
 #define STEP_DIR3_Pin GPIO_PIN_1
 #define STEP_DIR3_GPIO_Port GPIOC
 #define STEP_DIR2_Pin GPIO_PIN_2
@@ -75,8 +73,6 @@ void Error_Handler(void);
 #define STEP_2_GPIO_Port GPIOE
 #define STEP_3_Pin GPIO_PIN_13
 #define STEP_3_GPIO_Port GPIOE
-#define STEP_4_Pin GPIO_PIN_14
-#define STEP_4_GPIO_Port GPIOE
 #define DC_F1_Pin GPIO_PIN_8
 #define DC_F1_GPIO_Port GPIOD
 #define DC_F2_Pin GPIO_PIN_9

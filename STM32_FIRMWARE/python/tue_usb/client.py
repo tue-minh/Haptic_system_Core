@@ -26,6 +26,7 @@ from .defs import (
     LedState,
     ServoMode,
     ServoTorque,
+    DcMode,
     is_reserved_can_id,
 )
 from .frame import Frame
@@ -44,6 +45,9 @@ from .payloads import (
     StepperStatus,
     SysInfo,
     SysUid,
+    DcInfo,
+    DcChannelStatus,
+    DcFaults,
     mm_to_um,
     um_to_mm,
 )
@@ -94,6 +98,9 @@ class TueUsbClient:
         self._mock_servo_pos = {1: 2048, 2: 2048}
         self._mock_servo_speed = {1: 0, 2: 0}
         self._mock_servo_torque = {1: 1, 2: 1}
+        self._mock_dc_speed = {1: 0, 2: 0, 3: 0, 4: 0}
+        self._mock_dc_mode = {1: 0, 2: 0, 3: 0, 4: 0}
+        self._mock_dc_freq_hz = 20000
 
     def __enter__(self) -> "TueUsbClient":
         self.connect()
@@ -372,6 +379,61 @@ class TueUsbClient:
 
         elif can_id == CanId.SERVO_MEM_WRITE or can_id == CanId.SERVO_SET_ID or can_id == CanId.SERVO_RESET:
             return [Frame(FrameType.RESP_OK, can_id, bytes([p[0], 0]), seq)]
+
+        # 4. DC Motor Commands (0x600 - 0x607)
+        elif can_id == CanId.DC_GET_INFO:
+            payload = struct.pack("<BBHHH", 4, int(self._mock_dc_freq_hz // 1000), 1000, 4199, 0x8872)
+            return [Frame(FrameType.RESP_OK, can_id, payload, seq)]
+
+        elif can_id == CanId.DC_SET_SPEED:
+            m_id, spd = struct.unpack("<Bh", p[:3])
+            if 1 <= m_id <= 4:
+                self._mock_dc_speed[m_id] = spd
+                self._mock_dc_mode[m_id] = 1 if spd > 0 else (2 if spd < 0 else 0)
+            return [Frame(FrameType.RESP_OK, can_id, struct.pack("<BhB", m_id, spd, 0), seq)]
+
+        elif can_id == CanId.DC_GET_STATUS:
+            m_id = p[0]
+            spd = self._mock_dc_speed.get(m_id, 0)
+            mode = self._mock_dc_mode.get(m_id, 0)
+            return [Frame(FrameType.RESP_OK, can_id, struct.pack("<BBhBB", m_id, mode, spd, 0, 0), seq)]
+
+        elif can_id == CanId.DC_SET_SPEED_ALL:
+            m1, m2, m3, m4 = struct.unpack("<hhhh", p[:8])
+            self._mock_dc_speed[1] = m1
+            self._mock_dc_mode[1] = 1 if m1 > 0 else (2 if m1 < 0 else 0)
+            self._mock_dc_speed[2] = m2
+            self._mock_dc_mode[2] = 1 if m2 > 0 else (2 if m2 < 0 else 0)
+            self._mock_dc_speed[3] = m3
+            self._mock_dc_mode[3] = 1 if m3 > 0 else (2 if m3 < 0 else 0)
+            self._mock_dc_speed[4] = m4
+            self._mock_dc_mode[4] = 1 if m4 > 0 else (2 if m4 < 0 else 0)
+            payload = struct.pack("<BBBBB", 0, self._mock_dc_mode[1], self._mock_dc_mode[2], self._mock_dc_mode[3], self._mock_dc_mode[4])
+            return [Frame(FrameType.RESP_OK, can_id, payload, seq)]
+
+        elif can_id == CanId.DC_BRAKE:
+            m_id = p[0]
+            targets = [m_id] if 1 <= m_id <= 4 else [1, 2, 3, 4]
+            for m in targets:
+                self._mock_dc_speed[m] = 0
+                self._mock_dc_mode[m] = 3
+            return [Frame(FrameType.RESP_OK, can_id, struct.pack("<BB", m_id, 3), seq)]
+
+        elif can_id == CanId.DC_COAST:
+            m_id = p[0]
+            targets = [m_id] if 1 <= m_id <= 4 else [1, 2, 3, 4]
+            for m in targets:
+                self._mock_dc_speed[m] = 0
+                self._mock_dc_mode[m] = 0
+            return [Frame(FrameType.RESP_OK, can_id, struct.pack("<BB", m_id, 0), seq)]
+
+        elif can_id == CanId.DC_GET_FAULTS:
+            return [Frame(FrameType.RESP_OK, can_id, struct.pack("<BBBBB", 0, 0, 0, 0, 0), seq)]
+
+        elif can_id == CanId.DC_CONFIG_FREQ:
+            freq_khz = struct.unpack("<H", p[:2])[0]
+            self._mock_dc_freq_hz = freq_khz * 1000
+            return [Frame(FrameType.RESP_OK, can_id, struct.pack("<I", self._mock_dc_freq_hz), seq)]
 
         return [Frame(FrameType.RESP_ERR, can_id, bytes([ErrorCode.ERR_UNKNOWN_CAN_ID]), seq)]
 
@@ -799,3 +861,83 @@ class TueUsbClient:
         resp = self.transact(CanId.SERVO_RESET, Encoders.servo_reset(servo_id))
         _id, status = Decoders.servo_reset(resp.payload)
         return status
+
+    # ==========================================================================
+    # DC Motors / DRV8872 API (0x600 - 0x607)
+    # ==========================================================================
+
+    def dc_get_info(self) -> DcInfo:
+        """Query DC motor subsystem capabilities and timing configuration."""
+        resp = self.transact(CanId.DC_GET_INFO, Encoders.dc_get_info())
+        return Decoders.dc_info(resp.payload)
+
+    def dc_set_speed(self, motor_id: int, speed: int) -> Tuple[int, int, bool]:
+        """
+        Set speed / duty cycle for a single DC motor channel.
+
+        Args:
+            motor_id: Channel identifier (1..4).
+            speed: Signed speed in per-mille (-1000 to +1000).
+
+        Returns:
+            Tuple of (motor_id, speed, fault_active)
+        """
+        resp = self.transact(CanId.DC_SET_SPEED, Encoders.dc_set_speed(motor_id, speed))
+        return Decoders.dc_set_speed(resp.payload)
+
+    def dc_set_speed_all(self, m1: int, m2: int, m3: int, m4: int) -> Tuple[int, DcMode, DcMode, DcMode, DcMode]:
+        """
+        Set speed for all 4 DC motor channels in a single transaction.
+
+        Args:
+            m1, m2, m3, m4: Speeds for Motor 1..4 (-1000..+1000).
+
+        Returns:
+            Tuple of (fault_mask, m1_mode, m2_mode, m3_mode, m4_mode)
+        """
+        resp = self.transact(CanId.DC_SET_SPEED_ALL, Encoders.dc_set_speed_all(m1, m2, m3, m4))
+        return Decoders.dc_set_speed_all(resp.payload)
+
+    def dc_get_status(self, motor_id: int) -> DcChannelStatus:
+        """Query detailed status and fault feedback of a single motor channel (1..4)."""
+        resp = self.transact(CanId.DC_GET_STATUS, Encoders.dc_get_status(motor_id))
+        return Decoders.dc_channel_status(resp.payload)
+
+    def dc_brake(self, motor_id: int = 0xFF) -> Tuple[int, DcMode]:
+        """
+        Actively brake a motor channel or all channels (IN1=1, IN2=1).
+
+        Args:
+            motor_id: 1..4 for single channel, or 0xFF (default) for all channels.
+        """
+        resp = self.transact(CanId.DC_BRAKE, Encoders.dc_brake(motor_id))
+        return Decoders.dc_brake(resp.payload)
+
+    def dc_coast(self, motor_id: int = 0xFF) -> Tuple[int, DcMode]:
+        """
+        Put a motor channel or all channels into Hi-Z coast / idle (IN1=0, IN2=0).
+
+        Args:
+            motor_id: 1..4 for single channel, or 0xFF (default) for all channels.
+        """
+        resp = self.transact(CanId.DC_COAST, Encoders.dc_coast(motor_id))
+        return Decoders.dc_coast(resp.payload)
+
+    def dc_stop(self, motor_id: int = 0xFF) -> Tuple[int, DcMode]:
+        """Stop motor (alias for dc_coast)."""
+        return self.dc_coast(motor_id)
+
+    def dc_get_faults(self) -> DcFaults:
+        """Read the instantaneous hardware fault state of all 4 DRV8872 drivers (DC_F1..DC_F4)."""
+        resp = self.transact(CanId.DC_GET_FAULTS, Encoders.dc_get_faults())
+        return Decoders.dc_faults(resp.payload)
+
+    def dc_set_frequency(self, freq_khz: int) -> int:
+        """
+        Reconfigure the PWM switching frequency for TIM3 and TIM4 (1..50 kHz).
+
+        Returns:
+            The actual hardware frequency in Hz (e.g. 20000).
+        """
+        resp = self.transact(CanId.DC_CONFIG_FREQ, Encoders.dc_config_freq(freq_khz))
+        return Decoders.dc_config_freq(resp.payload)

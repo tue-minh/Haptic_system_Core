@@ -51,6 +51,7 @@ extern "C" {
 
 #include "tue_sts3215.h"
 #include "tue_stepper.h"
+#include "tue_dc.h"
 
 /* Board identity ------------------------------------------------------------*/
 #define TUE_USB_BOARD_NAME        "MM_Control"
@@ -154,6 +155,16 @@ typedef enum {
 #define TUE_USB_CAN_SERVO_SET_ID     0x414U
 #define TUE_USB_CAN_SERVO_RESET      0x415U
 
+/* --- DC motors / DRV8872 (0x600 - 0x607) ----------------------------------- */
+#define TUE_USB_CAN_DC_GET_INFO        0x600U
+#define TUE_USB_CAN_DC_SET_SPEED       0x601U
+#define TUE_USB_CAN_DC_GET_STATUS      0x602U
+#define TUE_USB_CAN_DC_SET_SPEED_ALL   0x603U
+#define TUE_USB_CAN_DC_BRAKE           0x604U
+#define TUE_USB_CAN_DC_COAST           0x605U
+#define TUE_USB_CAN_DC_GET_FAULTS      0x606U
+#define TUE_USB_CAN_DC_CONFIG_FREQ     0x607U
+
 /* --- Reserved for user custom communication (MUST NOT be used internally) - */
 #define TUE_USB_CAN_RESERVED_BASE    0x300U
 #define TUE_USB_CAN_RESERVED_LAST    0x3FFU
@@ -233,6 +244,14 @@ TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SERVO_MEM_READ);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SERVO_MEM_WRITE);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SERVO_SET_ID);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SERVO_RESET);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_DC_GET_INFO);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_DC_SET_SPEED);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_DC_GET_STATUS);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_DC_SET_SPEED_ALL);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_DC_BRAKE);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_DC_COAST);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_DC_GET_FAULTS);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_DC_CONFIG_FREQ);
 
 /* Decoded frame -------------------------------------------------------------*/
 typedef struct __attribute__((packed)) {

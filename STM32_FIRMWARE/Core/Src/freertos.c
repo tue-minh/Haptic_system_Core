@@ -125,7 +125,12 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1000);
+    // HAL_GPIO_TogglePin(LED_MCU_GPIO_Port, LED_MCU_Pin);
+    // tue_dc_set_speed_all(600,600,600,600);
+    // osDelay(3000);
+    // HAL_GPIO_TogglePin(LED_MCU_GPIO_Port, LED_MCU_Pin);
+    // tue_dc_set_speed_all(800,800,800,800);
+    osDelay(500);
   }
   /* USER CODE END StartDefaultTask */
 }

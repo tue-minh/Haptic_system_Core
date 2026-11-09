@@ -11,7 +11,7 @@ import struct
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
-from .defs import CanId, LedState, ServoMode, ServoTorque, ServoAlarmBit
+from .defs import CanId, LedState, ServoMode, ServoTorque, ServoAlarmBit, DcMode
 
 
 # ==============================================================================
@@ -305,6 +305,69 @@ class HapticUartDiag:
 
 
 # ==============================================================================
+# DC Motor Data Models (0x600 - 0x607)
+# ==============================================================================
+
+@dataclass
+class DcInfo:
+    """DC Motor controller capabilities and active configuration."""
+    motor_count: int
+    pwm_freq_khz: int
+    max_duty: int
+    timer_arr: int
+    driver_type: int
+
+    @property
+    def driver_name(self) -> str:
+        return "DRV8872" if self.driver_type == 0x8872 else f"0x{self.driver_type:04X}"
+
+    def __str__(self) -> str:
+        return (
+            f"DcInfo(channels={self.motor_count}, freq={self.pwm_freq_khz}kHz, "
+            f"max_duty={self.max_duty}, arr={self.timer_arr}, driver={self.driver_name})"
+        )
+
+
+@dataclass
+class DcChannelStatus:
+    """DC Motor individual channel telemetry."""
+    motor_id: int
+    mode: DcMode
+    speed: int           # Commanded speed (-1000..+1000)
+    fault_active: bool   # Current raw nFAULT pin (True = fault)
+    fault_latched: bool  # Latched fault history
+
+    @property
+    def duty_percent(self) -> float:
+        return abs(self.speed) / 10.0
+
+    def __str__(self) -> str:
+        return (
+            f"Motor {self.motor_id}: mode={self.mode.name}, speed={self.speed} "
+            f"({self.duty_percent:.1f}%), fault={int(self.fault_active)}, latched={int(self.fault_latched)}"
+        )
+
+
+@dataclass
+class DcFaults:
+    """DC Motor fault feedback status for all 4 channels (nFAULT pins)."""
+    mask: int            # Bitmask (bit0=M1, bit1=M2, bit2=M3, bit3=M4)
+    m1_fault: bool
+    m2_fault: bool
+    m3_fault: bool
+    m4_fault: bool
+
+    def has_any_fault(self) -> bool:
+        return self.mask != 0
+
+    def __str__(self) -> str:
+        return (
+            f"DcFaults(mask=0x{self.mask:02X}, M1={int(self.m1_fault)}, M2={int(self.m2_fault)}, "
+            f"M3={int(self.m3_fault)}, M4={int(self.m4_fault)})"
+        )
+
+
+# ==============================================================================
 # Encoders (Host -> Payload Bytes)
 # ==============================================================================
 
@@ -462,6 +525,39 @@ class Encoders:
     @staticmethod
     def haptic_telemetry(payload: HapticPayload) -> bytes:
         return payload.to_bytes()
+
+    # --- DC Motors / DRV8872 (0x600 - 0x607) ---
+    @staticmethod
+    def dc_get_info() -> bytes:
+        return b""
+
+    @staticmethod
+    def dc_set_speed(motor_id: int, speed: int) -> bytes:
+        return struct.pack("<Bh", motor_id & 0xFF, int(speed))
+
+    @staticmethod
+    def dc_get_status(motor_id: int) -> bytes:
+        return struct.pack("<B", motor_id & 0xFF)
+
+    @staticmethod
+    def dc_set_speed_all(m1: int, m2: int, m3: int, m4: int) -> bytes:
+        return struct.pack("<hhhh", int(m1), int(m2), int(m3), int(m4))
+
+    @staticmethod
+    def dc_brake(motor_id: int = 0xFF) -> bytes:
+        return struct.pack("<B", motor_id & 0xFF)
+
+    @staticmethod
+    def dc_coast(motor_id: int = 0xFF) -> bytes:
+        return struct.pack("<B", motor_id & 0xFF)
+
+    @staticmethod
+    def dc_get_faults() -> bytes:
+        return b""
+
+    @staticmethod
+    def dc_config_freq(freq_khz: int) -> bytes:
+        return struct.pack("<H", freq_khz & 0xFFFF)
 
 
 # ==============================================================================
@@ -736,3 +832,77 @@ class Decoders:
             timeouts=timeouts,
             replies=replies,
         )
+
+    # --- DC Motors / DRV8872 (0x600 - 0x607) ---
+    @staticmethod
+    def dc_info(payload: bytes) -> DcInfo:
+        if len(payload) < 8:
+            raise ValueError("DC_GET_INFO payload must be 8 bytes")
+        count, freq_khz, max_duty, arr, drv_type = struct.unpack("<BBHHH", payload[:8])
+        return DcInfo(
+            motor_count=count,
+            pwm_freq_khz=freq_khz,
+            max_duty=max_duty,
+            timer_arr=arr,
+            driver_type=drv_type,
+        )
+
+    @staticmethod
+    def dc_set_speed(payload: bytes) -> Tuple[int, int, bool]:
+        if len(payload) < 4:
+            raise ValueError("DC_SET_SPEED response must be at least 4 bytes")
+        motor_id, speed, fault = struct.unpack("<BhB", payload[:4])
+        return motor_id, speed, bool(fault)
+
+    @staticmethod
+    def dc_channel_status(payload: bytes) -> DcChannelStatus:
+        if len(payload) < 6:
+            raise ValueError("DC_GET_STATUS response must be at least 6 bytes")
+        motor_id, mode, speed, fault_act, fault_latch = struct.unpack("<BBhBB", payload[:6])
+        return DcChannelStatus(
+            motor_id=motor_id,
+            mode=DcMode(mode),
+            speed=speed,
+            fault_active=bool(fault_act),
+            fault_latched=bool(fault_latch),
+        )
+
+    @staticmethod
+    def dc_set_speed_all(payload: bytes) -> Tuple[int, DcMode, DcMode, DcMode, DcMode]:
+        if len(payload) < 5:
+            raise ValueError("DC_SET_SPEED_ALL response must be 5 bytes")
+        mask, m1, m2, m3, m4 = struct.unpack("<BBBBB", payload[:5])
+        return mask, DcMode(m1), DcMode(m2), DcMode(m3), DcMode(m4)
+
+    @staticmethod
+    def dc_brake(payload: bytes) -> Tuple[int, DcMode]:
+        if len(payload) < 2:
+            raise ValueError("DC_BRAKE response must be 2 bytes")
+        motor_id, mode = struct.unpack("<BB", payload[:2])
+        return motor_id, DcMode(mode)
+
+    @staticmethod
+    def dc_coast(payload: bytes) -> Tuple[int, DcMode]:
+        if len(payload) < 2:
+            raise ValueError("DC_COAST response must be 2 bytes")
+        motor_id, mode = struct.unpack("<BB", payload[:2])
+        return motor_id, DcMode(mode)
+
+    @staticmethod
+    def dc_faults(payload: bytes) -> DcFaults:
+        if len(payload) < 5:
+            raise ValueError("DC_GET_FAULTS response must be 5 bytes")
+        mask, f1, f2, f3, f4 = struct.unpack("<BBBBB", payload[:5])
+        return DcFaults(
+            mask=mask,
+            m1_fault=bool(f1),
+            m2_fault=bool(f2),
+            m3_fault=bool(f3),
+            m4_fault=bool(f4),
+        )
+
+    @staticmethod
+    def dc_config_freq(payload: bytes) -> int:
+        if len(payload) < 4:
+            raise ValueError("DC_CONFIG_FREQ response must be 4 bytes")
+        return struct.unpack("<I", payload[:4])[0]

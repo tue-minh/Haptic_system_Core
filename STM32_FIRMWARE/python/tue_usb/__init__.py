@@ -11,6 +11,7 @@ from .defs import (
     ServoAlarmBit,
     ServoMode,
     ServoTorque,
+    DcMode,
     is_reserved_can_id,
 )
 from .frame import Frame
@@ -29,6 +30,9 @@ from .payloads import (
     StepperStatus,
     SysInfo,
     SysUid,
+    DcInfo,
+    DcChannelStatus,
+    DcFaults,
     mm_to_um,
     um_to_mm,
 )
@@ -46,6 +50,7 @@ __all__ = [
     "ServoAlarmBit",
     "ServoMode",
     "ServoTorque",
+    "DcMode",
     "is_reserved_can_id",
     # Frame & Protocol
     "Frame",
@@ -66,6 +71,9 @@ __all__ = [
     "StepperStatus",
     "SysInfo",
     "SysUid",
+    "DcInfo",
+    "DcChannelStatus",
+    "DcFaults",
     "mm_to_um",
     "um_to_mm",
     # Client

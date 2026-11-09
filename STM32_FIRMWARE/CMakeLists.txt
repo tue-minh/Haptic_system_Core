@@ -51,6 +51,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/tue_usb_binary.c
     Core/Src/tue_haptic_bridge.c
     Core/Src/tue_stepper.c
+    Core/Src/tue_dc.c
 )
 
 # Add include paths

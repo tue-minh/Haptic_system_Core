@@ -105,6 +105,7 @@ static bool     usb_ring_pop(uint8_t *byte);
 static int      sys_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
 static int      step_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
 static int      servo_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
+static int      dc_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
 static int      haptic_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
 
 static tue_usb_error_t servo_map_err(tue_sts3215_status_t st);
@@ -482,6 +483,8 @@ static void usb_dispatch(const tue_usb_frame_t *f, const uint8_t *raw,
         err = step_cmd(f, out, &out_dlc);
     } else if (f->can_id >= TUE_USB_CAN_SERVO_PING && f->can_id <= TUE_USB_CAN_SERVO_RESET) {
         err = servo_cmd(f, out, &out_dlc);
+    } else if (f->can_id >= TUE_USB_CAN_DC_GET_INFO && f->can_id <= TUE_USB_CAN_DC_CONFIG_FREQ) {
+        err = dc_cmd(f, out, &out_dlc);
     } else if (f->can_id == TUE_USB_CAN_HAPTIC_TELEMETRY) {
         /* Unified tactile telemetry: cache locally and forward the exact
          * 20-byte frame to the UART slave. Fire-and-forget streaming: no
@@ -1117,6 +1120,143 @@ static int servo_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc)
 }
 
 /* ========================================================================== */
+/* DC motor dispatcher (0x600 - 0x607)                                        */
+/* ========================================================================== */
+
+static int dc_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc)
+{
+    switch (f->can_id) {
+    case TUE_USB_CAN_DC_GET_INFO: {
+        if (f->dlc != 0U) return (int)TUE_USB_ERR_BAD_ARG;
+        tue_dc_info_t info;
+        if (tue_dc_get_info(&info) != TUE_DC_OK) {
+            return (int)TUE_USB_ERR_INTERNAL;
+        }
+        out[0] = info.motor_count;
+        out[1] = info.pwm_freq_khz;
+        wr_u16(&out[2], info.max_duty);
+        wr_u16(&out[4], info.timer_arr);
+        wr_u16(&out[6], info.driver_type);
+        *out_dlc = 8U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_DC_SET_SPEED: {
+        if (f->dlc < 3U) return (int)TUE_USB_ERR_BAD_ARG;
+        uint8_t motor_id = f->payload[0];
+        int16_t speed    = rd_i16(&f->payload[1]);
+        if (motor_id < 1U || motor_id > TUE_DC_MOTOR_COUNT) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+        tue_dc_status_t st = tue_dc_set_speed(motor_id, speed);
+        if (st == TUE_DC_ERR_PARAM) return (int)TUE_USB_ERR_BAD_ARG;
+        if (st == TUE_DC_ERR_FAULT) return (int)TUE_USB_ERR_BUS_FAULT;
+
+        tue_dc_channel_status_t ch;
+        (void)tue_dc_get_channel_status(motor_id, &ch);
+        out[0] = motor_id;
+        wr_i16(&out[1], ch.speed);
+        out[3] = ch.fault_active ? 1U : 0U;
+        *out_dlc = 4U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_DC_GET_STATUS: {
+        if (f->dlc < 1U) return (int)TUE_USB_ERR_BAD_ARG;
+        uint8_t motor_id = f->payload[0];
+        if (motor_id < 1U || motor_id > TUE_DC_MOTOR_COUNT) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+        tue_dc_channel_status_t ch;
+        if (tue_dc_get_channel_status(motor_id, &ch) != TUE_DC_OK) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+        out[0] = ch.motor_id;
+        out[1] = (uint8_t)ch.mode;
+        wr_i16(&out[2], ch.speed);
+        out[4] = ch.fault_active ? 1U : 0U;
+        out[5] = ch.fault_latched ? 1U : 0U;
+        *out_dlc = 6U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_DC_SET_SPEED_ALL: {
+        if (f->dlc != 8U) return (int)TUE_USB_ERR_BAD_ARG;
+        int16_t m1 = rd_i16(&f->payload[0]);
+        int16_t m2 = rd_i16(&f->payload[2]);
+        int16_t m3 = rd_i16(&f->payload[4]);
+        int16_t m4 = rd_i16(&f->payload[6]);
+
+        (void)tue_dc_set_speed_all(m1, m2, m3, m4);
+
+        tue_dc_channel_status_t ch1, ch2, ch3, ch4;
+        (void)tue_dc_get_channel_status(1U, &ch1);
+        (void)tue_dc_get_channel_status(2U, &ch2);
+        (void)tue_dc_get_channel_status(3U, &ch3);
+        (void)tue_dc_get_channel_status(4U, &ch4);
+
+        out[0] = tue_dc_get_fault_mask();
+        out[1] = (uint8_t)ch1.mode;
+        out[2] = (uint8_t)ch2.mode;
+        out[3] = (uint8_t)ch3.mode;
+        out[4] = (uint8_t)ch4.mode;
+        *out_dlc = 5U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_DC_BRAKE: {
+        if (f->dlc < 1U) return (int)TUE_USB_ERR_BAD_ARG;
+        uint8_t motor_id = f->payload[0];
+        if (tue_dc_brake(motor_id) != TUE_DC_OK) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+        out[0] = motor_id;
+        out[1] = (uint8_t)TUE_DC_MODE_BRAKE;
+        *out_dlc = 2U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_DC_COAST: {
+        if (f->dlc < 1U) return (int)TUE_USB_ERR_BAD_ARG;
+        uint8_t motor_id = f->payload[0];
+        if (tue_dc_coast(motor_id) != TUE_DC_OK) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+        out[0] = motor_id;
+        out[1] = (uint8_t)TUE_DC_MODE_COAST;
+        *out_dlc = 2U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_DC_GET_FAULTS: {
+        if (f->dlc != 0U) return (int)TUE_USB_ERR_BAD_ARG;
+        out[0] = tue_dc_get_fault_mask();
+        out[1] = tue_dc_get_fault(1U) ? 1U : 0U;
+        out[2] = tue_dc_get_fault(2U) ? 1U : 0U;
+        out[3] = tue_dc_get_fault(3U) ? 1U : 0U;
+        out[4] = tue_dc_get_fault(4U) ? 1U : 0U;
+        *out_dlc = 5U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_DC_CONFIG_FREQ: {
+        if (f->dlc < 2U) return (int)TUE_USB_ERR_BAD_ARG;
+        uint16_t freq_khz = rd_u16(f->payload);
+        uint32_t freq_hz  = (uint32_t)freq_khz * 1000U;
+        if (tue_dc_set_pwm_frequency(freq_hz) != TUE_DC_OK) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+        wr_u32(out, tue_dc_get_pwm_frequency());
+        *out_dlc = 4U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    default:
+        return (int)TUE_USB_ERR_UNKNOWN_CAN_ID;
+    }
+}
+
+/* ========================================================================== */
 /* Public API                                                                 */
 /* ========================================================================== */
 
@@ -1132,6 +1272,9 @@ void tue_usb_init(void)
     /* The STEP commands drive the three stepper motors through the TIM1 step
      * clock. Idempotent: main() already calls it at boot. */
     tue_stepper_init();
+
+    /* DC Motors: 4 channels on TIM3 & TIM4 with DRV8872. */
+    (void)tue_dc_init();
 
     /* Slave haptic link: USART2 @ 115200 baud, polling (no DMA/IRQ). */
     (void)tue_haptic_init();

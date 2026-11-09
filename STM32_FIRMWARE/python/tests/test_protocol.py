@@ -24,6 +24,10 @@ from tue_usb import (
     PositionXYZ,
     ServoMode,
     ServoTorque,
+    DcMode,
+    DcInfo,
+    DcChannelStatus,
+    DcFaults,
     TueUsbClient,
     crc8_sae_j1850,
     crc8_selftest,
@@ -281,6 +285,131 @@ class TestProtocol(unittest.TestCase):
             mock_diag = client.haptic_uart_diag()
             self.assertTrue(mock_diag.rx_armed)
             self.assertTrue(mock_diag.last_tx_ok)
+
+
+    def test_10_dc_motor_protocol(self):
+        """DC Motor CAN protocol (0x600 - 0x607) encoding and decoding."""
+        # Validate CAN ID allocations
+        self.assertEqual(CanId.DC_GET_INFO, 0x600)
+        self.assertEqual(CanId.DC_SET_SPEED, 0x601)
+        self.assertEqual(CanId.DC_GET_STATUS, 0x602)
+        self.assertEqual(CanId.DC_SET_SPEED_ALL, 0x603)
+        self.assertEqual(CanId.DC_BRAKE, 0x604)
+        self.assertEqual(CanId.DC_COAST, 0x605)
+        self.assertEqual(CanId.DC_GET_FAULTS, 0x606)
+        self.assertEqual(CanId.DC_CONFIG_FREQ, 0x607)
+
+        # 1. DC Get Info
+        enc_info = Encoders.dc_get_info()
+        self.assertEqual(len(enc_info), 0)
+        resp_info_bytes = struct.pack("<BBHHH", 4, 20, 1000, 4199, 0x8872)
+        info = Decoders.dc_info(resp_info_bytes)
+        self.assertEqual(info.motor_count, 4)
+        self.assertEqual(info.pwm_freq_khz, 20)
+        self.assertEqual(info.max_duty, 1000)
+        self.assertEqual(info.timer_arr, 4199)
+        self.assertEqual(info.driver_type, 0x8872)
+        self.assertEqual(info.driver_name, "DRV8872")
+
+        # 2. DC Set Speed
+        enc_spd = Encoders.dc_set_speed(1, 750)
+        self.assertEqual(len(enc_spd), 3)
+        m_id, spd, fault = Decoders.dc_set_speed(struct.pack("<BhB", 1, 750, 0))
+        self.assertEqual(m_id, 1)
+        self.assertEqual(spd, 750)
+        self.assertFalse(fault)
+
+        # 3. DC Get Status
+        enc_st = Encoders.dc_get_status(2)
+        self.assertEqual(enc_st, b"\x02")
+        status = Decoders.dc_channel_status(struct.pack("<BBhBB", 2, DcMode.FORWARD, 500, 0, 0))
+        self.assertEqual(status.motor_id, 2)
+        self.assertEqual(status.mode, DcMode.FORWARD)
+        self.assertEqual(status.speed, 500)
+        self.assertEqual(status.duty_percent, 50.0)
+        self.assertFalse(status.fault_active)
+        self.assertFalse(status.fault_latched)
+
+        # 4. DC Set Speed All
+        enc_all = Encoders.dc_set_speed_all(500, -300, 1000, 0)
+        self.assertEqual(len(enc_all), 8)
+        mask, m1_m, m2_m, m3_m, m4_m = Decoders.dc_set_speed_all(
+            struct.pack("<BBBBB", 0x00, DcMode.FORWARD, DcMode.REVERSE, DcMode.FORWARD, DcMode.COAST)
+        )
+        self.assertEqual(mask, 0)
+        self.assertEqual(m1_m, DcMode.FORWARD)
+        self.assertEqual(m2_m, DcMode.REVERSE)
+        self.assertEqual(m3_m, DcMode.FORWARD)
+        self.assertEqual(m4_m, DcMode.COAST)
+
+        # 5. Brake & Coast
+        self.assertEqual(Encoders.dc_brake(1), b"\x01")
+        self.assertEqual(Encoders.dc_coast(1), b"\x01")
+        m, mode = Decoders.dc_brake(struct.pack("<BB", 1, DcMode.BRAKE))
+        self.assertEqual(m, 1)
+        self.assertEqual(mode, DcMode.BRAKE)
+
+        # 6. Faults
+        faults = Decoders.dc_faults(struct.pack("<BBBBB", 0x05, 1, 0, 1, 0))
+        self.assertEqual(faults.mask, 0x05)
+        self.assertTrue(faults.m1_fault)
+        self.assertFalse(faults.m2_fault)
+        self.assertTrue(faults.m3_fault)
+        self.assertFalse(faults.m4_fault)
+        self.assertTrue(faults.has_any_fault())
+
+        # 7. Config Freq
+        self.assertEqual(Encoders.dc_config_freq(25), struct.pack("<H", 25))
+        self.assertEqual(Decoders.dc_config_freq(struct.pack("<I", 25000)), 25000)
+
+
+    def test_11_mock_client_dc_operations(self):
+        """DC Motor client methods using simulated mock engine."""
+        with TueUsbClient(mock=True) as client:
+            info = client.dc_get_info()
+            self.assertEqual(info.motor_count, 4)
+            self.assertEqual(info.driver_name, "DRV8872")
+
+            # Set speed
+            m_id, spd, fault = client.dc_set_speed(1, 600)
+            self.assertEqual(m_id, 1)
+            self.assertEqual(spd, 600)
+            self.assertFalse(fault)
+
+            # Query status
+            st = client.dc_get_status(1)
+            self.assertEqual(st.motor_id, 1)
+            self.assertEqual(st.speed, 600)
+            self.assertEqual(st.mode, DcMode.FORWARD)
+
+            # Reverse
+            client.dc_set_speed(2, -400)
+            st2 = client.dc_get_status(2)
+            self.assertEqual(st2.speed, -400)
+            self.assertEqual(st2.mode, DcMode.REVERSE)
+
+            # Set all
+            mask, m1, m2, m3, m4 = client.dc_set_speed_all(100, 200, 300, 400)
+            self.assertEqual(mask, 0)
+            self.assertEqual(m1, DcMode.FORWARD)
+
+            # Brake
+            m, b_mode = client.dc_brake(1)
+            self.assertEqual(m, 1)
+            self.assertEqual(b_mode, DcMode.BRAKE)
+
+            # Coast
+            m, c_mode = client.dc_coast(1)
+            self.assertEqual(m, 1)
+            self.assertEqual(c_mode, DcMode.COAST)
+
+            # Faults
+            faults = client.dc_get_faults()
+            self.assertEqual(faults.mask, 0)
+
+            # Frequency config
+            actual_hz = client.dc_set_frequency(20)
+            self.assertEqual(actual_hz, 20000)
 
 
 if __name__ == "__main__":
