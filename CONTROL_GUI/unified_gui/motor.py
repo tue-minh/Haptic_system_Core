@@ -35,7 +35,8 @@ GRIPPER_POS_MIN, GRIPPER_POS_MAX = 55, 420
 GRIPPER_SPEED_MIN, GRIPPER_SPEED_MAX = 100, 3000
 GRIPPER_ACCEL_MIN, GRIPPER_ACCEL_MAX = 10, 200
 
-SERVO_ID = 3
+DEFAULT_SERVO_ID = 1
+SERVO_ID = DEFAULT_SERVO_ID
 JOG_AXES = ("x", "y", "z")
 
 
@@ -108,6 +109,10 @@ class MotorSnapshot:
     servo_load_pct: float = 0.0
     servo_temp_c: int = 0
     servo_moving: bool = False
+    servo_id: int = DEFAULT_SERVO_ID
+    servo_online: bool = False
+    servo_scanning: bool = False
+    servo_status_msg: str = "Offline (not synced)"
 
     jogging: Optional[str] = None
     last_warning: str = ""
@@ -133,6 +138,7 @@ class MotorWorker(threading.Thread):
         poll_hz: float = 15.0,
         client_factory: Optional[Callable[..., object]] = None,
         serial_timeout: float = 0.35,
+        default_servo_id: Optional[int] = None,
     ) -> None:
         super().__init__(daemon=True, name=f"Motor-{port}")
         self.port = port
@@ -141,6 +147,10 @@ class MotorWorker(threading.Thread):
         self._log_fn = log or (lambda _m: None)
         self._client_factory = client_factory
         self._serial_timeout = float(serial_timeout)
+        self._servo_id = int(default_servo_id) if default_servo_id is not None else DEFAULT_SERVO_ID
+        self._servo_online = False
+        self._servo_scanning = False
+        self._servo_consecutive_errors = 0
 
         self._stop_evt = threading.Event()
         self._q: Deque[Tuple[str, dict]] = deque()
@@ -148,7 +158,7 @@ class MotorWorker(threading.Thread):
         self._cv = threading.Condition()
 
         self._lock = threading.Lock()
-        self._snap = MotorSnapshot(connecting=True, poll_hz=self.poll_hz)
+        self._snap = MotorSnapshot(connecting=True, poll_hz=self.poll_hz, servo_id=self._servo_id)
         self._client = None
         # Shared-transport state: the raw handle and the write lock that the
         # haptic streamer borrows (see write_frame).
@@ -239,11 +249,27 @@ class MotorWorker(threading.Thread):
         self._submit("abort", urgent=True)
         self._update(jogging=None)
 
-    def servo_move(self, pos: int, speed: int, accel: int) -> None:
-        self._submit("servo_move", pos=int(pos), speed=int(speed), accel=int(accel))
+    def set_servo_id(self, sid: int) -> None:
+        self._servo_id = int(sid)
+        self._update(servo_id=int(sid))
+        self.log(f"servo target ID set to {sid}")
 
-    def servo_torque(self, on: bool) -> None:
-        self._submit("servo_torque", on=bool(on))
+    def scan_servo(self, max_id: int = 16) -> None:
+        self._update(servo_scanning=True, servo_status_msg="Scanning...")
+        self._submit("scan_servo", max_id=int(max_id))
+
+    def ping_servo(self, sid: Optional[int] = None) -> None:
+        target_id = self._servo_id if sid is None else int(sid)
+        self._update(servo_scanning=True, servo_status_msg=f"Pinging ID {target_id}...")
+        self._submit("ping_servo", sid=target_id)
+
+    def servo_move(self, pos: int, speed: int, accel: int, sid: Optional[int] = None) -> None:
+        target_id = self._servo_id if sid is None else int(sid)
+        self._submit("servo_move", pos=int(pos), speed=int(speed), accel=int(accel), sid=target_id)
+
+    def servo_torque(self, on: bool, sid: Optional[int] = None) -> None:
+        target_id = self._servo_id if sid is None else int(sid)
+        self._submit("servo_torque", on=bool(on), sid=target_id)
 
     def ping_haptic(self, token: int = 0) -> None:
         """Ping the ESP32 haptic slave over the STM32 USART2 link (CAN 0x301)."""
@@ -287,17 +313,16 @@ class MotorWorker(threading.Thread):
         return client
 
     def _handshake(self) -> bool:
-        """Ping board + servo, read firmware/resolution (Phase 2.2)."""
+        """Ping board + step configuration (Phase 2.2).
+
+        Enables the system immediately so steppers can be used right away
+        without waiting for servo motor synchronization.
+        """
         c = self._client
-        self.log(f"handshake: ping / get_info / step_get_config / servo_ping({SERVO_ID})")
+        self.log("handshake: ping / get_info / step_get_config")
         c.ping()
         info = c.get_info()
         cfg = c.step_get_config()
-        servo_ok = False
-        try:
-            servo_ok = bool(c.servo_ping(SERVO_ID))
-        except Exception as exc:
-            self.log(f"servo_ping failed: {exc}")
 
         self._update(
             connected=True,
@@ -312,9 +337,44 @@ class MotorWorker(threading.Thread):
         self.log(
             f"connected: hw={info.hw_id}.{info.hw_rev} fw={info.version_string} "
             f"xy={cfg.xy_steps_per_mm} steps/mm "
-            f"z={cfg.z_steps_per_mm} steps/mm "
-            f"servo={'ok' if servo_ok else 'NO RESPONSE'}"
+            f"z={cfg.z_steps_per_mm} steps/mm"
         )
+
+        # Quick initial probe of servo without delaying connect
+        try:
+            ping_fn = getattr(c, "servo_ping", None)
+            if callable(ping_fn):
+                try:
+                    ok = bool(ping_fn(self._servo_id, timeout=0.06))
+                except TypeError:
+                    ok = bool(ping_fn(self._servo_id))
+                if ok:
+                    self._servo_online = True
+                    self.log(f"servo ID {self._servo_id}: ONLINE")
+                    fb_fn = getattr(c, "servo_get_feedback", None)
+                    if callable(fb_fn):
+                        try:
+                            fb = fb_fn(self._servo_id)
+                            self._update(
+                                servo_online=True,
+                                servo_status_msg=f"Servo ID {self._servo_id}: Online",
+                                servo_pos=int(fb.dynamics.position),
+                                servo_volt_v=float(fb.health.voltage_v),
+                                servo_load_pct=float(fb.dynamics.load_percent),
+                                servo_temp_c=int(fb.health.temperature_c),
+                                servo_moving=bool(fb.dynamics.is_moving),
+                            )
+                        except Exception:
+                            self._update(servo_online=True, servo_status_msg=f"Servo ID {self._servo_id}: Online")
+                else:
+                    self._servo_online = False
+                    self._update(servo_online=False, servo_status_msg="Servo offline (click Scan)")
+                    self.log(f"servo ID {self._servo_id} not responding (use 'Scan Servo' in servo section)")
+        except Exception as exc:
+            self._servo_online = False
+            self._update(servo_online=False, servo_status_msg="Servo offline (click Scan)")
+            self.log(f"servo initial probe: {exc}")
+
         return True
 
     def _loop(self) -> None:
@@ -365,10 +425,106 @@ class MotorWorker(threading.Thread):
                 c.step_abort()
                 self.log("EMERGENCY ABORT")
             elif action == "servo_move":
-                c.servo_torque_enable(SERVO_ID, True)
-                c.servo_set_pos(SERVO_ID, kw["pos"], speed=kw["speed"], accel=kw["accel"])
+                sid = kw.get("sid", self._servo_id)
+                c.servo_torque_enable(sid, True)
+                c.servo_set_pos(sid, kw["pos"], speed=kw["speed"], accel=kw["accel"])
             elif action == "servo_torque":
-                c.servo_torque_enable(SERVO_ID, kw["on"])
+                sid = kw.get("sid", self._servo_id)
+                c.servo_torque_enable(sid, kw["on"])
+            elif action == "scan_servo":
+                max_id = int(kw.get("max_id", 16))
+                self._update(servo_scanning=True, servo_status_msg=f"Scanning IDs 1..{max_id}...")
+                self.log(f"scanning for servo (IDs 1..{max_id})...")
+                found_id = None
+                current = self._servo_id
+                probe_order = [current] + [i for i in range(1, max_id + 1) if i != current]
+                for sid in probe_order:
+                    if self._stop_evt.is_set():
+                        break
+                    try:
+                        ping_fn = getattr(c, "servo_ping", None)
+                        if callable(ping_fn):
+                            try:
+                                ok = bool(ping_fn(sid, timeout=0.06))
+                            except TypeError:
+                                ok = bool(ping_fn(sid))
+                            if ok:
+                                found_id = sid
+                                break
+                    except Exception:
+                        pass
+                    if self._urgent:
+                        break
+                if found_id is not None:
+                    self._servo_id = found_id
+                    self._servo_online = True
+                    self._servo_consecutive_errors = 0
+                    msg = f"Servo found: ID {found_id}"
+                    self.log(msg)
+                    try:
+                        fb = c.servo_get_feedback(found_id)
+                        self._update(
+                            servo_id=found_id,
+                            servo_online=True,
+                            servo_scanning=False,
+                            servo_status_msg=msg,
+                            servo_pos=int(fb.dynamics.position),
+                            servo_volt_v=float(fb.health.voltage_v),
+                            servo_load_pct=float(fb.dynamics.load_percent),
+                            servo_temp_c=int(fb.health.temperature_c),
+                            servo_moving=bool(fb.dynamics.is_moving),
+                        )
+                    except Exception:
+                        self._update(servo_id=found_id, servo_online=True,
+                                     servo_scanning=False, servo_status_msg=msg)
+                else:
+                    msg = f"No servo found (1..{max_id})"
+                    self.log(msg)
+                    self._servo_online = False
+                    self._update(servo_scanning=False, servo_status_msg=msg)
+            elif action == "ping_servo":
+                sid = int(kw.get("sid", self._servo_id))
+                self._update(servo_scanning=True, servo_status_msg=f"Pinging ID {sid}...")
+                try:
+                    ping_fn = getattr(c, "servo_ping", None)
+                    ok = False
+                    if callable(ping_fn):
+                        try:
+                            ok = bool(ping_fn(sid, timeout=0.12))
+                        except TypeError:
+                            ok = bool(ping_fn(sid))
+                    if ok:
+                        self._servo_id = sid
+                        self._servo_online = True
+                        self._servo_consecutive_errors = 0
+                        msg = f"Servo ID {sid}: ONLINE"
+                        self.log(msg)
+                        try:
+                            fb = c.servo_get_feedback(sid)
+                            self._update(
+                                servo_id=sid,
+                                servo_online=True,
+                                servo_scanning=False,
+                                servo_status_msg=msg,
+                                servo_pos=int(fb.dynamics.position),
+                                servo_volt_v=float(fb.health.voltage_v),
+                                servo_load_pct=float(fb.dynamics.load_percent),
+                                servo_temp_c=int(fb.health.temperature_c),
+                                servo_moving=bool(fb.dynamics.is_moving),
+                            )
+                        except Exception:
+                            self._update(servo_id=sid, servo_online=True,
+                                         servo_scanning=False, servo_status_msg=msg)
+                    else:
+                        msg = f"Servo ID {sid}: NO RESPONSE"
+                        self.log(msg)
+                        self._servo_online = False
+                        self._update(servo_online=False, servo_scanning=False, servo_status_msg=msg)
+                except Exception as exc:
+                    msg = f"Servo ID {sid} ping error: {exc}"
+                    self.log(msg)
+                    self._servo_online = False
+                    self._update(servo_online=False, servo_scanning=False, servo_status_msg=msg)
             elif action == "haptic_ping":
                 # A missing ESP32 is not a loss of the STM32 link, so keep this
                 # out of _consecutive_errors and report it in the snapshot.
@@ -409,11 +565,11 @@ class MotorWorker(threading.Thread):
 
     def _poll(self) -> None:
         c = self._client
+        # 1. Primary stepper telemetry
         try:
             px, py = c.step_get_pos_xy()
             pz = c.step_get_pos_z()
             status = c.step_get_status()
-            fb = c.servo_get_feedback(SERVO_ID)
             self._note_success()
             self._update(
                 x=float(px),
@@ -421,19 +577,36 @@ class MotorWorker(threading.Thread):
                 z=float(pz),
                 busy=bool(status.is_busy),
                 enabled=bool(status.is_enabled),
-                servo_pos=int(fb.dynamics.position),
-                servo_volt_v=float(fb.health.voltage_v),
-                servo_load_pct=float(fb.dynamics.load_percent),
-                servo_temp_c=int(fb.health.temperature_c),
-                servo_moving=bool(fb.dynamics.is_moving),
             )
-            self._rate_cnt += 1
-            now = time.perf_counter()
-            if now - self._rate_t0 >= 1.0:
-                self._update(poll_hz=self._rate_cnt / (now - self._rate_t0))
-                self._rate_t0, self._rate_cnt = now, 0
         except Exception as exc:
             self._note_error(exc, "poll")
+            return
+
+        # 2. Servo feedback only if servo is online
+        if self._servo_online:
+            try:
+                fb = c.servo_get_feedback(self._servo_id)
+                self._servo_consecutive_errors = 0
+                self._update(
+                    servo_pos=int(fb.dynamics.position),
+                    servo_volt_v=float(fb.health.voltage_v),
+                    servo_load_pct=float(fb.dynamics.load_percent),
+                    servo_temp_c=int(fb.health.temperature_c),
+                    servo_moving=bool(fb.dynamics.is_moving),
+                    servo_online=True,
+                )
+            except Exception as exc:
+                self._servo_consecutive_errors += 1
+                if self._servo_consecutive_errors >= 4:
+                    self._servo_online = False
+                    self._update(servo_online=False, servo_status_msg="Servo offline (sync lost)")
+                    self.log(f"servo ID {self._servo_id} feedback lost: {exc}")
+
+        self._rate_cnt += 1
+        now = time.perf_counter()
+        if now - self._rate_t0 >= 1.0:
+            self._update(poll_hz=self._rate_cnt / (now - self._rate_t0))
+            self._rate_t0, self._rate_cnt = now, 0
 
     # -- error handling -----------------------------------------------------
     def _note_success(self) -> None:

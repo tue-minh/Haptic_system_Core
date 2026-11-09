@@ -50,12 +50,15 @@ def _feedback(pos: int = 55):
 class FakeUsbClient:
     """Records the calls it receives and answers like a healthy binary board."""
 
-    def __init__(self, *, enabled: bool = False, fail_polls: int = 0, fail_ping: bool = False):
+    def __init__(self, *, enabled: bool = False, fail_polls: int = 0, fail_ping: bool = False,
+                 fail_servo: bool = False, active_servo_id: int = 1):
         self.calls = []
         self.closed = False
         self._enabled = enabled
         self._fail_polls = fail_polls
         self._fail_ping = fail_ping
+        self._fail_servo = fail_servo
+        self._active_servo_id = active_servo_id
         self._pos = (1.5, -2.0)
         self._z = 3.25
 
@@ -69,8 +72,11 @@ class FakeUsbClient:
     def step_get_config(self):
         return _config()
 
-    def servo_ping(self, sid=1):
-        return True
+    def servo_ping(self, sid=1, timeout=None):
+        self.calls.append(("servo_ping", sid))
+        if self._fail_servo:
+            return False
+        return sid == self._active_servo_id
 
     def step_get_pos_xy(self):
         if self._fail_polls > 0:
@@ -84,7 +90,9 @@ class FakeUsbClient:
     def step_get_status(self):
         return _status(self._enabled)
 
-    def servo_get_feedback(self, sid=1):
+    def servo_get_feedback(self, sid=1, timeout=None):
+        if self._fail_servo or sid != self._active_servo_id:
+            raise TimeoutError(f"servo {sid} offline")
         return _feedback()
 
     def step_enable(self, on):
@@ -257,6 +265,38 @@ class MotorWorkerTests(unittest.TestCase):
             self.assertTrue(wait_for(lambda: not worker.snapshot().connected, timeout=5))
             self.assertTrue(wait_for(lambda: not worker.is_alive(), timeout=5))
             self.assertIn("lost contact", worker.snapshot().error)
+        finally:
+            worker.shutdown()
+            worker.join(timeout=2)
+
+    def test_handshake_succeeds_even_when_servo_offline(self):
+        # Even if the servo does not respond or is not connected, the board
+        # connects immediately and steppers can be used right away.
+        worker, client = self._worker(fail_servo=True)
+        try:
+            snap = worker.snapshot()
+            self.assertTrue(snap.connected)
+            self.assertFalse(snap.servo_online)
+            # Steppers can be enabled and jogged right away
+            worker.enable(True)
+            self.assertTrue(wait_for(lambda: worker.snapshot().enabled))
+            worker.jog("x", 20.0, 300.0)
+            self.assertTrue(wait_for(lambda: any(c[0] == "step_jog_xy" for c in client.calls)))
+        finally:
+            worker.shutdown()
+            worker.join(timeout=2)
+
+    def test_scan_servo_detects_servo_id(self):
+        # Servo is on ID 5; scan_servo finds it and starts telemetry feedback
+        worker, _client = self._worker(active_servo_id=5)
+        try:
+            self.assertTrue(wait_for(lambda: worker.snapshot().connected))
+            worker.scan_servo(max_id=8)
+            self.assertTrue(wait_for(lambda: worker.snapshot().servo_online and worker.snapshot().servo_id == 5, timeout=4))
+            snap = worker.snapshot()
+            self.assertEqual(snap.servo_id, 5)
+            self.assertTrue(snap.servo_online)
+            self.assertAlmostEqual(snap.servo_volt_v, 12.1, places=3)
         finally:
             worker.shutdown()
             worker.join(timeout=2)

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Launcher script for the TUE USB Binary Protocol PyQt6 GUI.
 """

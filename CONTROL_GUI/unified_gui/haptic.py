@@ -80,11 +80,11 @@ FLAG_NAMES = (
 # finger-centric millimetre frame: x across the finger width, y from tip (0)
 # to base.  A/B/C run along the underside pad, D/E sit on the two flanks.
 VALVE_LAYOUT = (
-    ("A", "Tip (-X)", 0.0, 0.0),
+    ("A", "Tip (+Y)", 0.0, 0.0),
     ("B", "Mid (Fz)", 0.0, 11.0),
-    ("C", "Base (+X)", 0.0, 22.0),
-    ("D", "Left flank (+Y)", -7.0, 11.0),
-    ("E", "Right flank (-Y)", 7.0, 11.0),
+    ("C", "Base (-Y)", 0.0, 22.0),
+    ("D", "Left flank (+X)", -7.0, 11.0),
+    ("E", "Right flank (-X)", 7.0, 11.0),
 )
 VALVE_NAMES = tuple(v[0] for v in VALVE_LAYOUT)
 
@@ -258,21 +258,21 @@ class HapticPayloadSynthesizer:
             fy_net = 0.0
 
         # Directional mapping:
-        # Move in +X -> Valve C blows; Move in -X -> Valve A blows
-        if fx_net > 0:
-            f_c = fx_net
-            f_a = 0.0
-        else:
-            f_c = 0.0
-            f_a = abs(fx_net)
-
-        # Move in +Y -> Valve D blows; Move in -Y -> Valve E blows
+        # Move in +Y -> Valve A blows; Move in -Y -> Valve C blows
         if fy_net > 0:
-            f_d = fy_net
-            f_e = 0.0
+            f_a = fy_net
+            f_c = 0.0
         else:
+            f_a = 0.0
+            f_c = abs(fy_net)
+
+        # Move in +X -> Valve D blows; Move in -X -> Valve E blows
+        if fx_net > 0:
             f_d = 0.0
-            f_e = abs(fy_net)
+            f_e = fx_net
+        else:
+            f_d = abs(fx_net)
+            f_e = 0.0
 
         f_b = fz_avg
 

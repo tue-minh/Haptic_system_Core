@@ -1,0 +1,25 @@
+<UserControl x:Class="ControlGui.Wpf.Panels.HapticPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             mc:Ignorable="d" 
+             d:DesignWidth="450">
+    <GroupBox Header="Haptic output  (shares the STM32 link)" Margin="0,0,0,6" FontWeight="Bold" Foreground="#212121">
+        <StackPanel Margin="6" TextElement.FontWeight="Normal">
+            <CheckBox x:Name="ChkEnable" Content="Stream haptic frames" IsChecked="True" Margin="0,0,0,6" Checked="OnEnableToggled" Unchecked="OnEnableToggled"
+                      ToolTip="Sends the 5-valve payload to the STM32 at 100 Hz (CAN 0x300) on the same COM port as motor control."/>
+
+            <Border Background="#F5F5F5" BorderBrush="#E0E0E0" BorderThickness="1" CornerRadius="3" Padding="6,4" Margin="0,0,0,6">
+                <TextBlock x:Name="TxtState" Text="Waiting for STM32 link" Foreground="#616161" TextWrapping="Wrap"/>
+            </Border>
+
+            <TextBlock Text="CAN 0x300 · 8-byte payload → valves A-E" Foreground="#757575" FontSize="11" Margin="0,0,0,8"/>
+
+            <Button x:Name="BtnPingEsp32" Content="Ping ESP32 (UART 115200)" Height="26" Margin="0,0,0,4" IsEnabled="False" Click="OnPingEsp32Click"
+                    ToolTip="Sends CAN 0x301 to the STM32, which pings the ESP32 slave over USART2 at 115200 baud."/>
+
+            <TextBlock x:Name="TxtPingResult" Text="ESP32 ping: not run" Foreground="#757575" FontSize="11" TextWrapping="Wrap"/>
+        </StackPanel>
+    </GroupBox>
+</UserControl>

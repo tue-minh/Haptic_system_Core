@@ -1,0 +1,49 @@
+<UserControl x:Class="ControlGui.Wpf.Panels.RecordingPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             mc:Ignorable="d" 
+             d:DesignWidth="450">
+    <GroupBox Header="Data Recording" Margin="0,0,0,6" FontWeight="Bold" Foreground="#212121">
+        <StackPanel Margin="6" TextElement.FontWeight="Normal">
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Button Grid.Column="0" x:Name="BtnRecord" Content="●  Start Recording" Height="32" Margin="0,0,6,0" FontWeight="Bold" Click="OnToggleRecordClick"/>
+                <Border Grid.Column="1" Background="#F5F5F5" BorderBrush="#E0E0E0" BorderThickness="1" CornerRadius="3" Padding="4,2">
+                    <TextBlock x:Name="TxtElapsed" Text="00:00:00" FontFamily="Consolas" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+            </Grid>
+
+            <TextBlock x:Name="TxtRows" Text="Rows logged: 0" Foreground="#757575" Margin="0,0,0,4"/>
+            <TextBlock x:Name="TxtFiles" Text="No active recording" Foreground="#757575" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,6"/>
+
+            <!-- Output Directory row -->
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="50"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="70"/>
+                    <ColumnDefinition Width="60"/>
+                    <ColumnDefinition Width="30"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Output:" VerticalAlignment="Center"/>
+                <TextBox Grid.Column="1" x:Name="TxtOutputDir" Margin="0,0,4,0" VerticalContentAlignment="Center"/>
+                <Button Grid.Column="2" x:Name="BtnWorkspace" Content="Workspace" Margin="0,0,4,0" Click="OnWorkspaceClick"/>
+                <Button Grid.Column="3" x:Name="BtnDesktop" Content="Desktop" Margin="0,0,4,0" Click="OnDesktopClick"/>
+                <Button Grid.Column="4" x:Name="BtnBrowse" Content="…" Click="OnBrowseClick"/>
+            </Grid>
+
+            <!-- Master rate -->
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="Master sample rate:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBox x:Name="TxtSampleRate" Text="100.0" Width="55" VerticalContentAlignment="Center"/>
+                <TextBlock Text="Hz" VerticalAlignment="Center" Margin="4,0,0,0" Foreground="#757575"/>
+            </StackPanel>
+        </StackPanel>
+    </GroupBox>
+</UserControl>

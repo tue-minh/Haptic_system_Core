@@ -36,7 +36,7 @@ try:
 except Exception as exc:  # pragma: no cover - environment dependent
     raise SystemExit(f"pyserial is required: {exc}")
 
-DEFAULT_PORT = "COM14"
+DEFAULT_PORT = "COM15"
 DEFAULT_BAUD = 115200
 
 # The project keeps the TUE client in a plain directory beside this file.

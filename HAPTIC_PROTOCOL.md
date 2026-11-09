@@ -71,11 +71,11 @@ Synthesized by the GUI from the two 52-taxel force-sensor jaws; consumed by the 
 
 | Byte | Field | Unit / Range | Meaning | Drives |
 |---|---|---|---|---|
-| 0 | `F_Valve_A` | 0.1 N/LSB, 0..25.5 N | negative transverse shear (-X direction) | Valve A (bottom – distal tip) |
+| 0 | `F_Valve_A` | 0.1 N/LSB, 0..25.5 N | positive longitudinal shear (+Y direction) | Valve A (bottom – distal tip) |
 | 1 | `F_Valve_B` | 0.1 N/LSB, 0..25.5 N | average normal clamping force (Fz avg) | Valve B (bottom – medial mid) |
-| 2 | `F_Valve_C` | 0.1 N/LSB, 0..25.5 N | positive transverse shear (+X direction) | Valve C (bottom – proximal base) |
-| 3 | `F_Valve_D` | 0.1 N/LSB, 0..25.5 N | positive longitudinal shear (+Y direction) | Valve D (lateral left flank) |
-| 4 | `F_Valve_E` | 0.1 N/LSB, 0..25.5 N | negative longitudinal shear (-Y direction) | Valve E (lateral right flank) |
+| 2 | `F_Valve_C` | 0.1 N/LSB, 0..25.5 N | negative longitudinal shear (-Y direction) | Valve C (bottom – proximal base) |
+| 3 | `F_Valve_D` | 0.1 N/LSB, 0..25.5 N | positive transverse shear (+X direction) | Valve D (lateral left flank) |
+| 4 | `F_Valve_E` | 0.1 N/LSB, 0..25.5 N | negative transverse shear (-X direction) | Valve E (lateral right flank) |
 | 5 | `Reserved` | 0x00 | reserved for expansion | — |
 | 6 | `Status_Flags` | bitmask (below) | contact/slip/tare status | display + STM32 slip counter |
 | 7 | `Frame_Counter` | 0..255, rolling | per-frame sequence from the GUI | watchdog/debug (echoed in ping reply) |
@@ -93,10 +93,10 @@ Synthesized by the GUI from the two 52-taxel force-sensor jaws; consumed by the 
 
 - Inputs per jaw: `fz`, `fy`, `fx`, `taxels_fz` (52-vector or (52,3) array), optional `t`/`age_s`.
 - Directional shear resolution:
-  - Transverse $X$ axis: Sensors are mounted face-to-face ($\hat{X}_R = -\hat{X}_L$), so net shear is $F_{x,\text{net}} = (F_{x,L} - F_{x,R})/2$.
-    - Moving in $+X$ ($F_{x,\text{net}} > 0$) inflates **Valve C**; moving in $-X$ ($F_{x,\text{net}} < 0$) inflates **Valve A**.
   - Longitudinal $Y$ axis: Tips point downward ($\hat{Y}_L = \hat{Y}_R$), so net shear is $F_{y,\text{net}} = (F_{y,L} + F_{y,R})/2$.
-    - Moving in $+Y$ ($F_{y,\text{net}} > 0$) inflates **Valve D**; moving in $-Y$ ($F_{y,\text{net}} < 0$) inflates **Valve E**.
+    - Moving in $+Y$ ($F_{y,\text{net}} > 0$) inflates **Valve A** (distal tip); moving in $-Y$ ($F_{y,\text{net}} < 0$) inflates **Valve C** (proximal base).
+  - Transverse $X$ axis: Sensors are mounted face-to-face ($\hat{X}_R = -\hat{X}_L$), so net shear is $F_{x,\text{net}} = (F_{x,L} - F_{x,R})/2$.
+    - Moving in $+X$ ($F_{x,\text{net}} > 0$) inflates **Valve D** (left flank); moving in $-X$ ($F_{x,\text{net}} < 0$) inflates **Valve E** (right flank).
   - Normal $Z$ axis: Clamping force is averaged: $F_z^{\text{avg}} = (F_{z,L} + F_{z,R})/2$ driving **Valve B**.
 - Stale-data guard: a jaw whose last frame is older than 0.10 s contributes zeros.
 - Forces are quantized with `clamp_u8`: `byte = clamp(0, 255, round(N * 10))`.
@@ -111,11 +111,11 @@ Synthesized by the GUI from the two 52-taxel force-sensor jaws; consumed by the 
 
 - Sliding-window parser over a 512 B buffer: preamble/postamble/CRC validated; resync drops 1 byte on mismatch; valid 0x300 + DLC=8 frames reset the error counter and are dispatched to `handle_haptic_packet()`.
 - Direct valve force unpacking:
-  - `f_A = payload[0] * 0.1f` (Valve A: -X directional shear, Tip)
+  - `f_A = payload[0] * 0.1f` (Valve A: +Y directional shear, Tip)
   - `f_B = payload[1] * 0.1f` (Valve B: Fz clamping force, Mid)
-  - `f_C = payload[2] * 0.1f` (Valve C: +X directional shear, Base)
-  - `f_D = payload[3] * 0.1f` (Valve D: +Y directional shear, Left flank)
-  - `f_E = payload[4] * 0.1f` (Valve E: -Y directional shear, Right flank)
+  - `f_C = payload[2] * 0.1f` (Valve C: -Y directional shear, Base)
+  - `f_D = payload[3] * 0.1f` (Valve D: +X directional shear, Left flank)
+  - `f_E = payload[4] * 0.1f` (Valve E: -X directional shear, Right flank)
 - Each force goes through the transfer function (§6.1); DACs written only when voltage changed ≥ 0.015 V.
 
 ---

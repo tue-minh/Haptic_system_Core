@@ -1,0 +1,91 @@
+<UserControl x:Class="ControlGui.Wpf.Panels.ConnectionPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:ControlGui.Wpf.Controls"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             mc:Ignorable="d" 
+             d:DesignWidth="450">
+    <GroupBox Header="Connection" Margin="0,0,0,6" FontWeight="Bold" Foreground="#212121">
+        <StackPanel Margin="6" TextElement.FontWeight="Normal">
+            <!-- Header row -->
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="130"/>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="80"/>
+                    <ColumnDefinition Width="70"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Role" Foreground="#757575" FontWeight="SemiBold"/>
+                <TextBlock Grid.Column="1" Text="COM port" Foreground="#757575" FontWeight="SemiBold"/>
+                <TextBlock Grid.Column="2" Text="Baud" Foreground="#757575" FontWeight="SemiBold"/>
+                <TextBlock Grid.Column="3" Text="Action" Foreground="#757575" FontWeight="SemiBold"/>
+                <TextBlock Grid.Column="4" Text="" />
+                <TextBlock Grid.Column="5" Text="Link Status" Foreground="#757575" FontWeight="SemiBold"/>
+            </Grid>
+
+            <!-- Motor Role -->
+            <Grid Margin="0,2,0,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="130"/>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="80"/>
+                    <ColumnDefinition Width="70"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="STM32 (motor+haptic)" VerticalAlignment="Center" ToolTip="STM32 ACSI board: Stepper motion + Gripper servo + 100 Hz haptic out"/>
+                <ComboBox Grid.Column="1" x:Name="CmbMotorPort" Margin="0,0,4,0"/>
+                <ComboBox Grid.Column="2" x:Name="CmbMotorBaud" Margin="0,0,4,0"/>
+                <Button Grid.Column="3" x:Name="BtnMotorConnect" Content="Connect" Click="OnMotorConnectClick"/>
+                <controls:StatusLed Grid.Column="4" x:Name="LedMotor" State="off" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                <TextBlock Grid.Column="5" x:Name="TxtMotorStatus" Text="Disconnected" VerticalAlignment="Center" Foreground="#757575" TextTrimming="CharacterEllipsis"/>
+            </Grid>
+
+            <!-- Sensor L Role -->
+            <Grid Margin="0,2,0,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="130"/>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="80"/>
+                    <ColumnDefinition Width="70"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Left Sensor" VerticalAlignment="Center" ToolTip="PaXini Left Tactile Sensor (DP-S2015-Elite)"/>
+                <ComboBox Grid.Column="1" x:Name="CmbSensorLPort" Margin="0,0,4,0"/>
+                <ComboBox Grid.Column="2" x:Name="CmbSensorLBaud" Margin="0,0,4,0"/>
+                <Button Grid.Column="3" x:Name="BtnSensorLConnect" Content="Connect" Click="OnSensorLConnectClick"/>
+                <controls:StatusLed Grid.Column="4" x:Name="LedSensorL" State="off" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                <TextBlock Grid.Column="5" x:Name="TxtSensorLStatus" Text="Disconnected" VerticalAlignment="Center" Foreground="#757575" TextTrimming="CharacterEllipsis"/>
+            </Grid>
+
+            <!-- Sensor R Role -->
+            <Grid Margin="0,2,0,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="130"/>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="80"/>
+                    <ColumnDefinition Width="70"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="Right Sensor" VerticalAlignment="Center" ToolTip="PaXini Right Tactile Sensor (DP-S2015-Elite)"/>
+                <ComboBox Grid.Column="1" x:Name="CmbSensorRPort" Margin="0,0,4,0"/>
+                <ComboBox Grid.Column="2" x:Name="CmbSensorRBaud" Margin="0,0,4,0"/>
+                <Button Grid.Column="3" x:Name="BtnSensorRConnect" Content="Connect" Click="OnSensorRConnectClick"/>
+                <controls:StatusLed Grid.Column="4" x:Name="LedSensorR" State="off" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                <TextBlock Grid.Column="5" x:Name="TxtSensorRStatus" Text="Disconnected" VerticalAlignment="Center" Foreground="#757575" TextTrimming="CharacterEllipsis"/>
+            </Grid>
+
+            <!-- Bottom Master Buttons -->
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <Button x:Name="BtnConnectAll" Content="Connect All" Width="100" Margin="0,0,6,0" Click="OnConnectAllClick"/>
+                <Button x:Name="BtnDisconnectAll" Content="Disconnect All" Width="100" Margin="0,0,6,0" Click="OnDisconnectAllClick"/>
+                <Button x:Name="BtnRefreshPorts" Content="Refresh" Width="70" Click="OnRefreshPortsClick"/>
+            </StackPanel>
+        </StackPanel>
+    </GroupBox>
+</UserControl>

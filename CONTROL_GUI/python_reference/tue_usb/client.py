@@ -684,9 +684,9 @@ class TueUsbClient:
     # High-Level STS3215 Servo API (0x400 - 0x415)
     # ==========================================================================
 
-    def servo_ping(self, servo_id: int) -> bool:
+    def servo_ping(self, servo_id: int, timeout: Optional[float] = None) -> bool:
         """Ping STS3215 bus servo by ID (1..254)."""
-        resp = self.transact(CanId.SERVO_PING, Encoders.servo_ping(servo_id))
+        resp = self.transact(CanId.SERVO_PING, Encoders.servo_ping(servo_id), timeout=timeout)
         _id, ack = Decoders.servo_ping(resp.payload)
         return ack == 0
 
@@ -745,9 +745,9 @@ class TueUsbClient:
         _id, cur_pwm = Decoders.servo_pwm(resp.payload)
         return cur_pwm
 
-    def servo_get_feedback(self, servo_id: int) -> ServoFeedback:
+    def servo_get_feedback(self, servo_id: int, timeout: Optional[float] = None) -> ServoFeedback:
         """Query complete dual-frame telemetry feedback (Dynamics + Health)."""
-        f_dyn, f_hlt = self.transact_dual(CanId.SERVO_GET_FB, Encoders.servo_get_fb(servo_id))
+        f_dyn, f_hlt = self.transact_dual(CanId.SERVO_GET_FB, Encoders.servo_get_fb(servo_id), timeout=timeout)
         dyn = Decoders.servo_fb_dynamics(f_dyn.payload)
         hlt = Decoders.servo_fb_health(f_hlt.payload)
         return ServoFeedback(dynamics=dyn, health=hlt)

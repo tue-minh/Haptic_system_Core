@@ -53,34 +53,34 @@ class SynthesizerTests(unittest.TestCase):
         self.assertEqual(payload[:7], bytes([0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x03]))
 
     def test_directional_x_and_y_mapping(self):
-        # Move +X: Valve C blows; Move +Y: Valve D blows
+        # Move +Y: Valve A blows; Move +X: Valve D blows
         # Left: fx=2.0, fy=1.0; Right: fx=-2.0 (inverted!), fy=1.0
-        # fx_net = (2.0 - (-2.0)) / 2 = +2.0 -> Valve C = 20, Valve A = 0
-        # fy_net = (1.0 + 1.0) / 2 = +1.0 -> Valve D = 10, Valve E = 0
+        # fx_net = (2.0 - (-2.0)) / 2 = +2.0 -> Valve D = 20, Valve E = 0
+        # fy_net = (1.0 + 1.0) / 2 = +1.0 -> Valve A = 10, Valve C = 0
         # fz_avg = 6.0 N -> Valve B = 60
         left_pos = _side(fz=6.0, fx=2.0, fy=1.0)
         right_pos = _side(fz=6.0, fx=-2.0, fy=1.0)
         payload_pos = self.synth.synthesize(left_pos, right_pos, now=0.0)
-        self.assertEqual(payload_pos[:7], bytes([0, 60, 20, 10, 0, 0, 0x03]))
+        self.assertEqual(payload_pos[:7], bytes([10, 60, 0, 20, 0, 0, 0x03]))
 
-        # Move opposite (-X, -Y): Valve A blows, Valve E blows
+        # Move opposite (-X, -Y): Valve C blows, Valve E blows
         # Left: fx=-2.0, fy=-1.0; Right: fx=2.0 (inverted!), fy=-1.0
-        # fx_net = (-2.0 - 2.0) / 2 = -2.0 -> Valve A = 20, Valve C = 0
-        # fy_net = (-1.0 + -1.0) / 2 = -1.0 -> Valve E = 10, Valve D = 0
+        # fx_net = (-2.0 - 2.0) / 2 = -2.0 -> Valve E = 20, Valve D = 0
+        # fy_net = (-1.0 + -1.0) / 2 = -1.0 -> Valve C = 10, Valve A = 0
         left_neg = _side(fz=6.0, fx=-2.0, fy=-1.0)
         right_neg = _side(fz=6.0, fx=2.0, fy=-1.0)
         payload_neg = self.synth.synthesize(left_neg, right_neg, now=0.0)
-        self.assertEqual(payload_neg[:7], bytes([20, 60, 0, 0, 10, 0, 0x03]))
+        self.assertEqual(payload_neg[:7], bytes([0, 60, 10, 0, 20, 0, 0x03]))
 
     def test_stale_side_is_zeroed(self):
         stale = _side(fz=5.0, fy=2.0, age_s=0.5)
         fresh = _side(fz=3.0, fy=1.0)
         payload = self.synth.synthesize(stale, fresh, now=0.0)
-        self.assertEqual(payload[0], 0)     # Valve A = 0
+        self.assertEqual(payload[0], 10)    # Valve A (+Fy) = 10 from fresh
         self.assertEqual(payload[1], 30)    # Valve B (Fz) = 30 from fresh
         self.assertEqual(payload[2], 0)     # Valve C = 0
-        self.assertEqual(payload[3], 10)    # Valve D (+Fy) = 10 from fresh
-        self.assertEqual(payload[4], 0)     # Valve E (-Fy) = 0
+        self.assertEqual(payload[3], 0)     # Valve D = 0
+        self.assertEqual(payload[4], 0)     # Valve E = 0
         self.assertFalse(payload[6] & h.FLAG_LEFT_CONTACT)
         self.assertTrue(payload[6] & h.FLAG_RIGHT_CONTACT)
 

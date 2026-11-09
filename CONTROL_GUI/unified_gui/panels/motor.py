@@ -16,6 +16,7 @@ from .. import theme
 from ..motor import (
     ACCEL_MAX,
     ACCEL_MIN,
+    DEFAULT_SERVO_ID,
     GRIPPER_ACCEL_MAX,
     GRIPPER_ACCEL_MIN,
     GRIPPER_CLOSE,
@@ -276,6 +277,31 @@ class GripperPanel(QtWidgets.QGroupBox):
         root = QtWidgets.QVBoxLayout(self)
         root.setSpacing(8)
 
+        # ---- scan & connection row
+        scan_row = QtWidgets.QHBoxLayout()
+        scan_row.addWidget(QtWidgets.QLabel("Servo ID:"))
+        self.spin_id = QtWidgets.QSpinBox()
+        self.spin_id.setRange(1, 254)
+        self.spin_id.setValue(DEFAULT_SERVO_ID)
+        self.spin_id.valueChanged.connect(self._on_id_changed)
+        scan_row.addWidget(self.spin_id)
+
+        self.btn_scan = QtWidgets.QPushButton("Scan Servo")
+        self.btn_scan.setToolTip("Scan bus for active STS3215 servo IDs (1..16)")
+        self.btn_scan.clicked.connect(self._scan_servo)
+        scan_row.addWidget(self.btn_scan)
+
+        self.btn_ping = QtWidgets.QPushButton("Ping")
+        self.btn_ping.setToolTip("Ping current servo ID")
+        self.btn_ping.clicked.connect(self._ping_servo)
+        scan_row.addWidget(self.btn_ping)
+
+        self.lbl_servo_status = QtWidgets.QLabel("Offline")
+        self.lbl_servo_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_servo_status.setStyleSheet("color: gray; font-weight: bold;")
+        scan_row.addWidget(self.lbl_servo_status, 1)
+        root.addLayout(scan_row)
+
         tel = QtWidgets.QGridLayout()
         tel.setHorizontalSpacing(8)
         self.vals = {}
@@ -346,10 +372,13 @@ class GripperPanel(QtWidgets.QGroupBox):
         self.worker = worker
         if worker is None:
             self._set_controls_enabled(False)
+            self.lbl_servo_status.setText("Offline")
+            self.lbl_servo_status.setStyleSheet("color: gray; font-weight: bold;")
 
     def _set_controls_enabled(self, on: bool) -> None:
         for w in (self.btn_open, self.btn_close, self.btn_move, self.spin_pos,
-                  self.slider_pos, self.spin_speed, self.spin_accel):
+                  self.slider_pos, self.spin_speed, self.spin_accel,
+                  self.btn_scan, self.btn_ping, self.spin_id):
             w.setEnabled(on)
 
     # -- telemetry ----------------------------------------------------------
@@ -359,12 +388,56 @@ class GripperPanel(QtWidgets.QGroupBox):
         for key, (lab, spec, unit) in self.vals.items():
             lab.setText(fmt(mapping[key], spec, unit))
         self._set_controls_enabled(snap.connected)
-        self.state_label.setText(
-            f"state: {self._state}   |   servo pos {snap.servo_pos} step"
-            + ("   |   moving" if snap.servo_moving else "")
-        )
+
+        is_scanning = snap.servo_scanning
+        self.btn_scan.setEnabled(snap.connected and not is_scanning)
+        self.btn_ping.setEnabled(snap.connected and not is_scanning)
+        self.spin_id.setEnabled(snap.connected and not is_scanning)
+        self.btn_scan.setText("Scanning..." if is_scanning else "Scan Servo")
+
+        if not self.spin_id.hasFocus():
+            self.spin_id.blockSignals(True)
+            self.spin_id.setValue(snap.servo_id)
+            self.spin_id.blockSignals(False)
+
+        if snap.servo_online:
+            self.lbl_servo_status.setText(f"ID {snap.servo_id}: Online")
+            self.lbl_servo_status.setStyleSheet("color: #4cd964; font-weight: bold;")
+        elif is_scanning:
+            self.lbl_servo_status.setText("Scanning...")
+            self.lbl_servo_status.setStyleSheet("color: #ff9500; font-weight: bold;")
+        elif snap.connected:
+            self.lbl_servo_status.setText(snap.servo_status_msg or "Offline (Click Scan)")
+            self.lbl_servo_status.setStyleSheet("color: #ff3b30; font-weight: bold;")
+        else:
+            self.lbl_servo_status.setText("Offline")
+            self.lbl_servo_status.setStyleSheet("color: gray; font-weight: bold;")
+
+        state_str = f"state: {self._state}"
+        if snap.servo_online:
+            state_str += f"   |   ID {snap.servo_id} pos {snap.servo_pos} step"
+            if snap.servo_moving:
+                state_str += "   |   moving"
+        elif snap.connected:
+            state_str += f"   |   servo not synced (click 'Scan Servo')"
+        self.state_label.setText(state_str)
 
     # -- actions ------------------------------------------------------------
+    def _scan_servo(self) -> None:
+        if self.worker is not None:
+            self._log("scanning for STS3215 servo...")
+            self.worker.scan_servo(16)
+
+    def _ping_servo(self) -> None:
+        if self.worker is not None:
+            sid = self.spin_id.value()
+            self._log(f"pinging servo ID {sid}...")
+            self.worker.ping_servo(sid)
+
+    def _on_id_changed(self, sid: int) -> None:
+        if self.worker is not None:
+            self.worker.set_servo_id(sid)
+
     def _preset(self, pos: int, state: str) -> None:
         if self.worker is None:
             return
