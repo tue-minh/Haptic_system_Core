@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("ControlGui.Wpf")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+39bc5fde78d3b0b624c3c4671025d5302502b2dd")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ecea876537455603a58cc75094035793f5a237c8")]
 [assembly: System.Reflection.AssemblyProductAttribute("ControlGui.Wpf")]
 [assembly: System.Reflection.AssemblyTitleAttribute("ControlGui.Wpf")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

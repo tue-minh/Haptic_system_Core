@@ -32,6 +32,32 @@ namespace ControlGui.Core.Haptic
         public const double ForceLsbN = 0.1;
         public const double MaxForceN = 25.5;
 
+        // MCP4725 Valve Voltage Simulation Parameters (matched to ESP32 firmware)
+        public const double VMin = 0.70;
+        public const double VMax = 2.20;
+        public const double ForceThresh = 0.20;
+        public const double ForceRated = 20.00;
+        public const double Vdd = 3.30;
+        public const int DacMax = 4095;
+
+        public static double ComputeValveVoltage(double forceN)
+        {
+            if (forceN <= ForceThresh)
+                return 0.0;
+
+            double ratio = (forceN - ForceThresh) / (ForceRated - ForceThresh);
+            ratio = Math.Clamp(ratio, 0.0, 1.0);
+
+            double vOut = VMin + (VMax - VMin) * ratio;
+            return Math.Min(vOut, VMax);
+        }
+
+        public static ushort VoltageToDac(double voltage)
+        {
+            int val = (int)((voltage / Vdd) * DacMax);
+            return (ushort)Math.Clamp(val, 0, DacMax);
+        }
+
         public const int NTaxels = 52;
 
         // 3-zone spatial partition along finger, Tip -> Base

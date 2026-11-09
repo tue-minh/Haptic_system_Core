@@ -2054,19 +2054,19 @@
     ]
   },
   "packageFolders": {
-    "C:\\Users\\nguye\\.nuget\\packages\\": {}
+    "C:\\Users\\ADMIN\\.nuget\\packages\\": {}
   },
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "c:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj",
+      "projectUniqueName": "d:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj",
       "projectName": "ControlGui.Wpf",
-      "projectPath": "c:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj",
-      "packagesPath": "C:\\Users\\nguye\\.nuget\\packages\\",
-      "outputPath": "c:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Wpf\\obj\\",
+      "projectPath": "d:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj",
+      "packagesPath": "C:\\Users\\ADMIN\\.nuget\\packages\\",
+      "outputPath": "d:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Wpf\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
-        "C:\\Users\\nguye\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        "C:\\Users\\ADMIN\\AppData\\Roaming\\NuGet\\NuGet.Config"
       ],
       "originalTargetFrameworks": [
         "net8.0-windows"
@@ -2079,8 +2079,8 @@
           "framework": "net8.0-windows7.0",
           "targetAlias": "net8.0-windows",
           "projectReferences": {
-            "c:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj": {
-              "projectPath": "c:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj"
+            "d:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj": {
+              "projectPath": "d:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj"
             }
           }
         }

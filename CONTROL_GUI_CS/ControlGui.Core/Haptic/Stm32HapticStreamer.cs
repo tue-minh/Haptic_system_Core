@@ -17,7 +17,8 @@ namespace ControlGui.Core.Haptic
         double Weight,
         byte Raw,
         double T,
-        double Age
+        double Age,
+        double Voltage = 0.0
     );
 
     public record HapticSnapshot(
@@ -79,7 +80,8 @@ namespace ControlGui.Core.Haptic
                 byte rawVal = p[i];
                 double forceVal = rawVal * HapticConstants.ForceLsbN;
                 double weightVal = rawVal / 255.0;
-                valves[i] = new HapticValve(item.Name, item.Label, item.X, item.Y, forceVal, weightVal, rawVal, t, age);
+                double voltVal = HapticConstants.ComputeValveVoltage(forceVal);
+                valves[i] = new HapticValve(item.Name, item.Label, item.X, item.Y, forceVal, weightVal, rawVal, t, age, voltVal);
             }
 
             return new HapticSnapshot(

@@ -145,6 +145,19 @@ namespace ControlGui.Tests
             Assert.AreEqual(0.0, snap.Valves[4].Force, 0.01);
             Assert.IsTrue(snap.FlagNames.Contains("L-contact"));
             Assert.IsTrue(snap.FlagNames.Contains("R-contact"));
+            Assert.AreEqual(0.80, snap.Valves[0].Voltage, 0.02);
+            Assert.AreEqual(0.0, snap.Valves[2].Voltage, 0.001);
+        }
+
+        [TestMethod]
+        public void TestValveVoltageSimulation()
+        {
+            Assert.AreEqual(0.0, HapticConstants.ComputeValveVoltage(0.0));
+            Assert.AreEqual(0.0, HapticConstants.ComputeValveVoltage(0.20));
+            Assert.AreEqual(2.20, HapticConstants.ComputeValveVoltage(20.0), 0.001);
+            Assert.AreEqual(2.20, HapticConstants.ComputeValveVoltage(25.5), 0.001);
+            Assert.AreEqual(0, HapticConstants.VoltageToDac(0.0));
+            Assert.AreEqual((ushort)((2.20 / 3.30) * 4095), HapticConstants.VoltageToDac(2.20));
         }
 
         [TestMethod]

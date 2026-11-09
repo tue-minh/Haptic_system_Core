@@ -15,6 +15,8 @@ namespace ControlGui.Wpf.Controls
         public string Label { get; set; } = "";
         public double Force { get; set; }
         public string ForceFormatted => $"{Force:F1} N";
+        public double Voltage { get; set; }
+        public string VoltageFormatted => $"{Voltage:F2} V";
         public byte Raw { get; set; }
         public double Weight { get; set; }
         public string WeightFormatted => $"{Weight * 100:F0}%";
@@ -88,6 +90,7 @@ namespace ControlGui.Wpf.Controls
                         Name = v.Name,
                         Label = v.Label,
                         Force = v.Force,
+                        Voltage = v.Voltage,
                         Raw = v.Raw,
                         Weight = v.Weight
                     });
@@ -163,7 +166,7 @@ namespace ControlGui.Wpf.Controls
                         Fill = new SolidColorBrush(c),
                         Stroke = new SolidColorBrush(Color.FromRgb(0x75, 0x75, 0x75)),
                         StrokeThickness = 1.2,
-                        ToolTip = $"Valve {v.Name}: {v.Label}\nForce: {v.Force:F1} N\nByte: {v.Raw}"
+                        ToolTip = $"Valve {v.Name}: {v.Label}\nForce: {v.Force:F1} N\nVoltage: {v.Voltage:F2} V\nByte: {v.Raw}"
                     };
                     Canvas.SetLeft(circle, pt.X - radius);
                     Canvas.SetTop(circle, pt.Y - radius);

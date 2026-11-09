@@ -49,11 +49,12 @@
 
                     <DataGrid x:Name="GridValves" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="Transparent" BorderThickness="0">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Ch" Binding="{Binding Name}" Width="40" FontWeight="Bold"/>
-                            <DataGridTextColumn Header="Position" Binding="{Binding Label}" Width="130"/>
-                            <DataGridTextColumn Header="Force (N)" Binding="{Binding ForceFormatted}" Width="75"/>
-                            <DataGridTextColumn Header="Byte" Binding="{Binding Raw}" Width="50"/>
-                            <DataGridTextColumn Header="Weight" Binding="{Binding WeightFormatted}" Width="65"/>
+                            <DataGridTextColumn Header="Ch" Binding="{Binding Name}" Width="35" FontWeight="Bold"/>
+                            <DataGridTextColumn Header="Position" Binding="{Binding Label}" Width="120"/>
+                            <DataGridTextColumn Header="Force (N)" Binding="{Binding ForceFormatted}" Width="70"/>
+                            <DataGridTextColumn Header="Voltage (V)" Binding="{Binding VoltageFormatted}" Width="80"/>
+                            <DataGridTextColumn Header="Byte" Binding="{Binding Raw}" Width="45"/>
+                            <DataGridTextColumn Header="Weight" Binding="{Binding WeightFormatted}" Width="60"/>
                         </DataGrid.Columns>
                     </DataGrid>
 

@@ -11,3 +11,16 @@ C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Core\obj\Debug
 C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\refint\ControlGui.Core.dll
 C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\ControlGui.Core.pdb
 C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\ref\ControlGui.Core.dll
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\bin\Debug\net8.0\ControlGui.Core.deps.json
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\bin\Debug\net8.0\ControlGui.Core.dll
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\bin\Debug\net8.0\ControlGui.Core.pdb
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\ControlGui.Core.csproj.AssemblyReference.cache
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\ControlGui.Core.GeneratedMSBuildEditorConfig.editorconfig
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\ControlGui.Core.AssemblyInfoInputs.cache
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\ControlGui.Core.AssemblyInfo.cs
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\ControlGui.Core.csproj.CoreCompileInputs.cache
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\ControlGui.Core.sourcelink.json
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\ControlGui.Core.dll
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\refint\ControlGui.Core.dll
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\ControlGui.Core.pdb
+d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Core\obj\Debug\net8.0\ref\ControlGui.Core.dll

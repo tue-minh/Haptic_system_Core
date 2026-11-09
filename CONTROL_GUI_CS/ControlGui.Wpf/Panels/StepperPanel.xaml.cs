@@ -10,8 +10,8 @@ namespace ControlGui.Wpf.Panels
     public partial class StepperPanel : UserControl
     {
         private MotorWorker? _worker;
-        private double _velocity = 25.0;
-        private double _accel = 300.0;
+        private double _velocity = 5.0;
+        private double _accel = 50.0;
         private bool _isUpdatingUi = false;
 
         public StepperPanel()

@@ -57,12 +57,12 @@
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Column="0" Grid.Row="0" Text="Feed velocity" VerticalAlignment="Center"/>
-                <TextBox Grid.Column="1" Grid.Row="0" x:Name="TxtVel" Text="25.0" Margin="0,0,6,4" TextChanged="OnVelTextChanged"/>
-                <Slider Grid.Column="2" Grid.Row="0" x:Name="SliderVel" Minimum="1" Maximum="100" Value="25" VerticalAlignment="Center" ValueChanged="OnSliderVelChanged"/>
+                <TextBox Grid.Column="1" Grid.Row="0" x:Name="TxtVel" Text="5.0" Margin="0,0,6,4" TextChanged="OnVelTextChanged"/>
+                <Slider Grid.Column="2" Grid.Row="0" x:Name="SliderVel" Minimum="1" Maximum="100" Value="5" VerticalAlignment="Center" ValueChanged="OnSliderVelChanged"/>
 
                 <TextBlock Grid.Column="0" Grid.Row="1" Text="Acceleration" VerticalAlignment="Center"/>
-                <TextBox Grid.Column="1" Grid.Row="1" x:Name="TxtAccel" Text="300.0" Margin="0,0,6,0" TextChanged="OnAccelTextChanged"/>
-                <Slider Grid.Column="2" Grid.Row="1" x:Name="SliderAccel" Minimum="50" Maximum="1000" Value="300" VerticalAlignment="Center" ValueChanged="OnSliderAccelChanged"/>
+                <TextBox Grid.Column="1" Grid.Row="1" x:Name="TxtAccel" Text="50.0" Margin="0,0,6,0" TextChanged="OnAccelTextChanged"/>
+                <Slider Grid.Column="2" Grid.Row="1" x:Name="SliderAccel" Minimum="50" Maximum="1000" Value="50" VerticalAlignment="Center" ValueChanged="OnSliderAccelChanged"/>
             </Grid>
 
             <!-- Jog Pad: Cross for X/Y, Column for Z, and Full-height E-STOP -->

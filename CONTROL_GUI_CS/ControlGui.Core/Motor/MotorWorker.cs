@@ -113,7 +113,7 @@ namespace ControlGui.Core.Motor
             _wakeEvent.Set();
         }
 
-        public void Jog(string axis, double velocity, double accel = 300.0)
+        public void Jog(string axis, double velocity, double accel = 50.0)
         {
             _commandQueue.Enqueue(c =>
             {
