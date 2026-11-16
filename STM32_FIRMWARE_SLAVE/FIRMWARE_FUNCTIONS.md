@@ -1,6 +1,6 @@
 # STM32_FIRMWARE_SLAVE — Firmware Functions & Hardware Configuration
 
-This document describes the peripheral configuration, pinout, DMA channels, interrupts, and application functions for `STM32_FIRMWARE_SLAVE` (STM32F103xB), designed to read feedback from 5 ITV pneumatic valves via 5 ADC channels and log/debug over USART1.
+This document describes the peripheral configuration, pinout, DMA channels, interrupts, SPI slave protocol, and application functions for `STM32_FIRMWARE_SLAVE` (STM32F103xB), designed to read feedback from 5 ITV pneumatic valves via 5 ADC channels, log/debug over USART1, and stream the 5 ADC values to the master (`STM32_FIRMWARE`) over SPI1 Slave.
 
 ---
 
@@ -12,6 +12,8 @@ This document describes the peripheral configuration, pinout, DMA channels, inte
   - **APB1**: `HCLK / 2` (36 MHz)
   - **APB2**: `HCLK / 1` (72 MHz)
   - **ADC Clock**: `RCC_ADCPCLK2_DIV6` (12 MHz)
+- **Debug / JTAG Remap (`HAL_MspInit` in `Core/Src/stm32f1xx_hal_msp.c`)**:
+  - `__HAL_AFIO_REMAP_SWJ_NOJTAG()` frees `PB3` and `PB4` for `SPI1` while keeping SWD active.
 
 ---
 
@@ -26,49 +28,66 @@ This document describes the peripheral configuration, pinout, DMA channels, inte
   - `PA3` (`ADC1_IN3`, Rank 4)
   - `PA4` (`ADC1_IN4`, Rank 5)
 - **Configuration**:
-  - `ScanConvMode`: `ADC_SCAN_ENABLE`
-  - `ContinuousConvMode`: `DISABLE` (software-triggered 5-channel scan every `20 ms`)
-  - `ExternalTrigConv`: `ADC_SOFTWARE_START`
-  - `DataAlign`: `ADC_DATAALIGN_RIGHT` (12-bit: `0..4095`)
-  - `NbrOfConversion`: `5`
-  - `SamplingTime`: `ADC_SAMPLETIME_55CYCLES_5` (all 5 channels)
-  - Calibrated at startup via `HAL_ADCEx_Calibration_Start(&hadc1)`
-- **DMA**: `DMA1_Channel1` (`DMA_PERIPH_TO_MEMORY`, `DMA_NORMAL`, HalfWord alignment, `MemInc = ENABLE`, `Priority = LOW`)
-- **Interrupts**: `DMA1_Channel1_IRQn` and `ADC1_2_IRQn` enabled (Priority 0, Subpriority 0)
+  - `ScanConvMode`: `ADC_SCAN_ENABLE`, `ContinuousConvMode`: `DISABLE`, `NbrOfConversion`: `5`, `SamplingTime`: `ADC_SAMPLETIME_55CYCLES_5`
+  - Calibrated at startup via `HAL_ADCEx_Calibration_Start(&hadc1)`, triggered every `20 ms`
+- **DMA & Interrupts**: `DMA1_Channel1` (`DMA_PERIPH_TO_MEMORY`, HalfWord), `DMA1_Channel1_IRQn`, `ADC1_2_IRQn`
+
+### SPI1 (Slave Interface to Master `STM32_FIRMWARE`)
+- **Source**: `Core/Src/spi.c` (`MX_SPI1_Init`, `HAL_SPI_MspInit`)
+- **Pins (AFIO SPI1 Remap enabled)**:
+  - `PB3` (`SPI1_SCK`, Input from Master)
+  - `PB4` (`SPI1_MISO`, AF Push-Pull output to Master)
+  - `PB5` (`SPI1_MOSI`, Input from Master)
+  - `PB6` (`SPI1_NSS_Pin`, GPIO Input active-low CS from Master)
+- **Configuration** (matches Master `STM32_FIRMWARE` SPI1 settings):
+  - `Mode`: `SPI_MODE_SLAVE`, `Direction`: `SPI_DIRECTION_2LINES`
+  - `DataSize`: `SPI_DATASIZE_8BIT`, `FirstBit`: `SPI_FIRSTBIT_MSB`
+  - `CLKPolarity`: `SPI_POLARITY_LOW` (CPOL = 0), `CLKPhase`: `SPI_PHASE_1EDGE` (CPHA = 0)
+  - `NSS`: `SPI_NSS_SOFT` (CS monitored on `PB6`)
+- **DMA & Interrupts**:
+  - **RX**: `DMA1_Channel2` (`DMA_PERIPH_TO_MEMORY`, Byte, `DMA_PRIORITY_HIGH`)
+  - **TX**: `DMA1_Channel3` (`DMA_MEMORY_TO_PERIPH`, Byte, `DMA_PRIORITY_HIGH`)
+  - **Interrupts**: `DMA1_Channel2_IRQn`, `DMA1_Channel3_IRQn`, `SPI1_IRQn`
 
 ### USART1 (Debugging & Telemetry Logging)
 - **Source**: `Core/Src/usart.c` (`MX_USART1_UART_Init`, `HAL_UART_MspInit`)
-- **Pins**:
-  - `PA9` (`USART1_TX`, Alternate Function Push-Pull, High Speed)
-  - `PA10` (`USART1_RX`, Input, No Pull)
-- **Configuration**: `115200` baud, 8N1, `UART_MODE_TX_RX`, no flow control
-- **DMA**:
-  - **TX**: `DMA1_Channel4` (`DMA_MEMORY_TO_PERIPH`, `DMA_NORMAL`, Byte alignment, `MemInc = ENABLE`)
-  - **RX**: `DMA1_Channel5` (`DMA_PERIPH_TO_MEMORY`, `DMA_NORMAL`, Byte alignment, `MemInc = ENABLE`)
-- **Interrupts**: `DMA1_Channel4_IRQn`, `DMA1_Channel5_IRQn`, and `USART1_IRQn` (including IDLE line detection via `HAL_UARTEx_ReceiveToIdle_DMA`)
+- **Pins**: `PA9` (`USART1_TX`), `PA10` (`USART1_RX`)
+- **Configuration**: `115200` baud, 8N1, `UART_MODE_TX_RX`
+- **DMA & Interrupts**: `DMA1_Channel4` (TX), `DMA1_Channel5` (RX), `USART1_IRQn` (IDLE line via `HAL_UARTEx_ReceiveToIdle_DMA`)
 
 ---
 
-## 3. Application Functions & Interrupt Callbacks (`Core/Src/main.c`)
+## 3. SPI1 Slave Packet Format (`ItvSpiFrame_t`, 16 Bytes)
+
+To read all 5 valve ADC values from the master (`STM32_FIRMWARE`), pull `PB6` (`CS`) LOW, clock **16 bytes** on `SPI1` (Mode 0, 8-bit MSB first), and pull `PB6` HIGH:
+
+| Byte Offset | Size | Field | Description |
+| :--- | :--- | :--- | :--- |
+| `0` | 1 | `sof0` | Sync byte 0 (`0xAA`) |
+| `1` | 1 | `sof1` | Sync byte 1 (`0x55`) |
+| `2` | 1 | `seq` | Rolling sample counter (`0..255`, increments each ADC scan) |
+| `3` | 1 | `status` | Bit 0: `1` = ADC data valid; Bit 1: `1` = ADC error occurred |
+| `4..13` | 10 | `adc_raw[5]` | `uint16_t[5]` little-endian raw 12-bit ADC counts (`PA0..PA4`, `0..4095`) |
+| `14..15` | 2 | `crc16` | `uint16_t` little-endian CRC-16/CCITT-FALSE (poly `0x1021`, init `0xFFFF`) over bytes `0..13` |
+
+---
+
+## 4. Application Functions & Interrupt Callbacks (`Core/Src/main.c`)
 
 ### Helper Functions
-- `ITV_RawToMillivolts(raw)` — Converts 12-bit ADC count (`0..4095`) to millivolts (`0..3300 mV` assuming 3.3 V reference).
-- `UART1_StartRxDMA()` — Arms `HAL_UARTEx_ReceiveToIdle_DMA` on `USART1` and disables the DMA Half-Transfer interrupt so RX events trigger only on IDLE line or full buffer.
-- `UART1_SendDMA(msg, wait_timeout_ms)` — Non-blocking (or bounded-wait) DMA TX helper using `HAL_UART_Transmit_DMA`.
-- `ITV_LogSample(raw, timestamp_ms, wait_tx)` — Formats and transmits all 5 channels as raw ADC counts and millivolts:
-  ```text
-  [t=120ms] RAW:1024,2048,512,4095,0 | mV:825,1650,413,3300,0
-  ```
-- `ITV_ProcessCommand()` — Parses incoming `USART1` debug commands.
+- `SPI1_CalcCRC16(data, len)` — Computes CRC-16/CCITT-FALSE (`0x1021`, init `0xFFFF`).
+- `SPI1_PackFrame(buf)` — Atomically snapshots `adc_latest[0..4]`, `adc_seq`, and status into `ItvSpiFrame_t` with CRC-16.
+- `SPI1_RearmSlaveDMA()` — Resets/aborts SPI1 if needed, clears `OVR`, packs the latest ADC frame into `spi_tx_buf`, and arms `HAL_SPI_TransmitReceive_DMA`.
+- `ITV_RawToMillivolts(raw)` — Converts 12-bit ADC count (`0..4095`) to millivolts (`0..3300 mV`).
+- `UART1_StartRxDMA()`, `UART1_SendDMA()`, `ITV_LogSample()`, `ITV_ProcessCommand()` — Non-blocking USART1 DMA logging and debug command handling.
 
 ### Interrupt Callbacks
-- `HAL_ADC_ConvCpltCallback` — Copies the 5 DMA-transferred ADC samples from `adc_dma_buf` to `adc_latest`, increments `adc_sample_count`, sets `adc_data_ready`, and clears `adc_busy`.
-- `HAL_ADC_ErrorCallback` — Increments `adc_error_count` and clears `adc_busy` so sampling can recover.
-- `HAL_UART_TxCpltCallback` — Increments `uart_tx_count` and clears `uart_tx_busy`.
-- `HAL_UARTEx_RxEventCallback` — Copies received command bytes, sets `uart_cmd_ready`, increments `uart_rx_count`, and re-arms `UART1_StartRxDMA()`.
-- `HAL_UART_ErrorCallback` — Increments `uart_error_count`, clears `uart_tx_busy`, and re-arms `UART1_StartRxDMA()`.
+- `HAL_ADC_ConvCpltCallback` — Latches `adc_dma_buf[0..4]` into `adc_latest`, increments `adc_seq`/`adc_sample_count`, and marks `spi_adc_dirty = 1`.
+- `HAL_SPI_TxRxCpltCallback` — Increments `spi_tx_count`, packs the latest ADC frame, and immediately re-arms `HAL_SPI_TransmitReceive_DMA`.
+- `HAL_SPI_ErrorCallback` — Increments `spi_error_count`, clears `OVR`, and re-arms DMA if SPI1 is ready (otherwise main loop recovers when `PB6` CS is idle).
+- `HAL_UART_TxCpltCallback`, `HAL_UARTEx_RxEventCallback`, `HAL_UART_ErrorCallback` — Manage USART1 DMA TX/RX and IDLE command reception.
 
-### Serial Debug Commands (115200 8N1)
+### Serial Debug Commands (`USART1`, 115200 8N1)
 | Command | Action |
 | :--- | :--- |
 | `help` or `?` | Print command list |
@@ -76,4 +95,4 @@ This document describes the peripheral configuration, pinout, DMA channels, inte
 | `stop` | Pause periodic streaming |
 | `read` | Print one immediate 5-channel reading |
 | `rate <ms>` | Set streaming interval (`20..10000 ms`) |
-| `stat` | Print ADC sample, UART TX/RX, and error counters |
+| `stat` | Print ADC, SPI1 (`spi`, `spi_err`, `resync`), and UART counters |

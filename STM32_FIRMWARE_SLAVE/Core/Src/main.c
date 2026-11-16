@@ -20,6 +20,7 @@
 #include "main.h"
 #include "adc.h"
 #include "dma.h"
+#include "spi.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -32,7 +33,15 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct __attribute__((packed))
+{
+  uint8_t  sof0;
+  uint8_t  sof1;
+  uint8_t  seq;
+  uint8_t  status;
+  uint16_t adc_raw[5];
+  uint16_t crc16;
+} ItvSpiFrame_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -46,6 +55,9 @@
 #define MAX_LOG_PERIOD_MS     10000U
 #define UART_TX_BUF_SIZE      192U
 #define UART_RX_BUF_SIZE      64U
+#define SPI_FRAME_SIZE        ((uint16_t)sizeof(ItvSpiFrame_t))
+#define SPI_FRAME_SOF0        0xAAU
+#define SPI_FRAME_SOF1        0x55U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -60,8 +72,17 @@ static volatile uint16_t adc_dma_buf[ITV_CH_COUNT];
 static volatile uint16_t adc_latest[ITV_CH_COUNT];
 static volatile uint8_t  adc_busy = 0U;
 static volatile uint8_t  adc_data_ready = 0U;
+static volatile uint8_t  adc_valid = 0U;
+static volatile uint8_t  adc_seq = 0U;
 static volatile uint32_t adc_sample_count = 0U;
 static volatile uint32_t adc_error_count = 0U;
+
+static uint8_t           spi_tx_buf[SPI_FRAME_SIZE];
+static uint8_t           spi_rx_buf[SPI_FRAME_SIZE];
+static volatile uint8_t  spi_adc_dirty = 0U;
+static volatile uint32_t spi_tx_count = 0U;
+static volatile uint32_t spi_error_count = 0U;
+static volatile uint32_t spi_resync_count = 0U;
 
 static uint8_t           uart_tx_buf[UART_TX_BUF_SIZE];
 static uint8_t           uart_rx_dma_buf[UART_RX_BUF_SIZE];
@@ -80,6 +101,9 @@ static uint32_t          log_period_ms = DEFAULT_LOG_PERIOD_MS;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+static uint16_t SPI1_CalcCRC16(const uint8_t *data, size_t len);
+static void SPI1_PackFrame(uint8_t *buf);
+static void SPI1_RearmSlaveDMA(void);
 static void UART1_StartRxDMA(void);
 static uint8_t UART1_SendDMA(const char *msg, uint32_t wait_timeout_ms);
 static void ITV_LogSample(const uint16_t raw[ITV_CH_COUNT], uint32_t timestamp_ms, uint8_t wait_tx);
@@ -88,6 +112,70 @@ static void ITV_ProcessCommand(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static uint16_t SPI1_CalcCRC16(const uint8_t *data, size_t len)
+{
+  uint16_t crc = 0xFFFFU;
+  for (size_t i = 0U; i < len; i++)
+  {
+    crc ^= (uint16_t)data[i] << 8;
+    for (uint8_t bit = 0U; bit < 8U; bit++)
+    {
+      if ((crc & 0x8000U) != 0U)
+      {
+        crc = (uint16_t)((crc << 1) ^ 0x1021U);
+      }
+      else
+      {
+        crc = (uint16_t)(crc << 1);
+      }
+    }
+  }
+  return crc;
+}
+
+static void SPI1_PackFrame(uint8_t *buf)
+{
+  ItvSpiFrame_t frame;
+  frame.sof0 = SPI_FRAME_SOF0;
+  frame.sof1 = SPI_FRAME_SOF1;
+
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  frame.seq = adc_seq;
+  frame.status = (adc_valid != 0U) ? 0x01U : 0x00U;
+  if (adc_error_count > 0U)
+  {
+    frame.status |= 0x02U;
+  }
+  for (uint32_t i = 0U; i < ITV_CH_COUNT; i++)
+  {
+    frame.adc_raw[i] = adc_latest[i];
+  }
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+
+  frame.crc16 = SPI1_CalcCRC16((const uint8_t *)&frame, sizeof(frame) - sizeof(frame.crc16));
+  memcpy(buf, &frame, sizeof(frame));
+}
+
+static void SPI1_RearmSlaveDMA(void)
+{
+  if (hspi1.State != HAL_SPI_STATE_READY)
+  {
+    (void)HAL_SPI_Abort(&hspi1);
+  }
+  __HAL_SPI_CLEAR_OVRFLAG(&hspi1);
+  SPI1_PackFrame(spi_tx_buf);
+  spi_adc_dirty = 0U;
+
+  if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
+  {
+    spi_error_count++;
+  }
+}
+
 static uint32_t ITV_RawToMillivolts(uint16_t raw)
 {
   return ((uint32_t)raw * ADC_REF_MV + (ADC_MAX_COUNT / 2U)) / ADC_MAX_COUNT;
@@ -251,13 +339,17 @@ static void ITV_ProcessCommand(void)
   }
   else if (strcmp(p, "stat") == 0)
   {
-    (void)snprintf(reply, sizeof(reply),
-                   "STAT: adc=%lu adc_err=%lu tx=%lu rx=%lu uart_err=%lu\r\n",
-                   (unsigned long)adc_sample_count,
-                   (unsigned long)adc_error_count,
-                   (unsigned long)uart_tx_count,
-                   (unsigned long)uart_rx_count,
-                   (unsigned long)uart_error_count);
+    (void)snprintf(
+        reply, sizeof(reply),
+        "STAT: adc=%lu adc_err=%lu spi=%lu spi_err=%lu resync=%lu tx=%lu rx=%lu u_err=%lu\r\n",
+        (unsigned long)adc_sample_count,
+        (unsigned long)adc_error_count,
+        (unsigned long)spi_tx_count,
+        (unsigned long)spi_error_count,
+        (unsigned long)spi_resync_count,
+        (unsigned long)uart_tx_count,
+        (unsigned long)uart_rx_count,
+        (unsigned long)uart_error_count);
     (void)UART1_SendDMA(reply, 50U);
   }
   else
@@ -300,6 +392,7 @@ int main(void)
   MX_DMA_Init();
   MX_ADC1_Init();
   MX_USART1_UART_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
   if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
   {
@@ -308,8 +401,10 @@ int main(void)
 
   UART1_StartRxDMA();
   (void)UART1_SendDMA(
-      "\r\nITV_SLAVE_READY: ADC1 5ch(PA0-PA4) DMA+IRQ | USART1 115200 DMA+IRQ\r\n",
+      "\r\nITV_SLAVE_READY: ADC1 5ch(PA0-PA4) | USART1 115200 | SPI1 Slave 16B DMA+IRQ\r\n",
       50U);
+
+  SPI1_RearmSlaveDMA();
 
   uint32_t last_sample_tick = HAL_GetTick();
   uint32_t last_log_tick = HAL_GetTick();
@@ -340,6 +435,22 @@ int main(void)
       {
         adc_busy = 0U;
         adc_error_count++;
+      }
+    }
+
+    if ((HAL_GPIO_ReadPin(SPI1_NSS_GPIO_Port, SPI1_NSS_Pin) == GPIO_PIN_SET) &&
+        (__HAL_SPI_GET_FLAG(&hspi1, SPI_FLAG_BSY) == RESET))
+    {
+      uint8_t partial_rx = (hspi1.hdmarx != NULL) &&
+                           (__HAL_DMA_GET_COUNTER(hspi1.hdmarx) != SPI_FRAME_SIZE);
+      if (partial_rx != 0U)
+      {
+        spi_resync_count++;
+        SPI1_RearmSlaveDMA();
+      }
+      else if ((spi_adc_dirty != 0U) || (hspi1.State == HAL_SPI_STATE_READY))
+      {
+        SPI1_RearmSlaveDMA();
       }
     }
 
@@ -424,8 +535,11 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
     {
       adc_latest[i] = adc_dma_buf[i];
     }
+    adc_seq++;
+    adc_valid = 1U;
     adc_sample_count++;
     adc_data_ready = 1U;
+    spi_adc_dirty = 1U;
     adc_busy = 0U;
   }
 }
@@ -436,6 +550,38 @@ void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
   {
     adc_error_count++;
     adc_busy = 0U;
+  }
+}
+
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+  if (hspi->Instance == SPI1)
+  {
+    spi_tx_count++;
+    SPI1_PackFrame(spi_tx_buf);
+    spi_adc_dirty = 0U;
+    if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
+    {
+      spi_error_count++;
+    }
+  }
+}
+
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
+{
+  if (hspi->Instance == SPI1)
+  {
+    spi_error_count++;
+    __HAL_SPI_CLEAR_OVRFLAG(hspi);
+    if (hspi->State == HAL_SPI_STATE_READY)
+    {
+      SPI1_PackFrame(spi_tx_buf);
+      spi_adc_dirty = 0U;
+      if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
+      {
+        spi_error_count++;
+      }
+    }
   }
 }
 
