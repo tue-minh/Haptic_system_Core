@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -238,6 +239,59 @@ namespace ControlGui.Tests
         }
 
         [TestMethod]
+        public void TestSpiAdcPackingAndMockClient()
+        {
+            ushort[] channels = { 0x123, 0x456, 0x789, 0xABC, 0xDEF };
+            ulong packed = 0;
+            for (int i = 0; i < channels.Length; i++)
+            {
+                packed |= (ulong)(channels[i] & 0xFFF) << (12 * i);
+            }
+            packed |= 3UL << 60;
+            byte[] payload = new byte[8];
+            BinaryPrimitives.WriteUInt64LittleEndian(payload, packed);
+
+            var (decoded, status) = Decoders.SensorAdcAll(payload);
+            CollectionAssert.AreEqual(channels, decoded);
+            Assert.AreEqual((byte)3, status);
+            Assert.IsTrue(new SpiAdcFeedback(decoded, 1, status, 2, 0).AdcValid);
+            Assert.IsTrue(new SpiAdcFeedback(decoded, 1, status, 2, 0).AdcError);
+
+            var mvFeedback = new SpiAdcFeedback(new ushort[] { 0, 2048, 4095, 100, 200 }, 1, 1, 2, 0);
+            var mv = mvFeedback.Millivolts();
+            Assert.AreEqual(2048 * 3300.0 / 4095.0, mv[1], 0.001);
+            Assert.AreEqual(3300.0, mv[2], 0.001);
+
+            using var client = new TueUsbClient(mock: true);
+            client.Connect();
+            var ctrl = client.GetSpiAdcStatus();
+            Assert.IsTrue(ctrl.Enabled);
+            Assert.AreEqual((byte)1, ctrl.BusId);
+
+            var reading = client.ReadSpiAdc();
+            Assert.AreEqual(5, reading.Channels.Length);
+            Assert.IsTrue(reading.AdcValid);
+            Assert.AreEqual(5, reading.Millivolts().Length);
+        }
+
+        [TestMethod]
+        public void TestSpiAdcConfigureMock()
+        {
+            using var client = new TueUsbClient(mock: true);
+            client.Connect();
+
+            var cfg = client.ConfigureSpiAdc(false, 3, 2, 20);
+            Assert.IsFalse(cfg.Enabled);
+            Assert.AreEqual((byte)3, cfg.BusId);
+            Assert.AreEqual((byte)2, cfg.CsIdx);
+            Assert.AreEqual((byte)20, cfg.PeriodMs);
+
+            var again = client.GetSpiAdcStatus();
+            Assert.AreEqual((byte)3, again.BusId);
+            Assert.AreEqual((byte)2, again.CsIdx);
+        }
+
+        [TestMethod]
         public void TestMotorWorkerMockLifecycle()
         {
             using var worker = new MotorWorker("MOCK_PORT", mock: true, pollHz: 30.0);
@@ -251,6 +305,16 @@ namespace ControlGui.Tests
             Assert.IsTrue(snap.Streaming);
             Assert.AreEqual(80, snap.StepsPerMmXy);
             Assert.AreEqual(400, snap.StepsPerMmZ);
+            Assert.IsTrue(snap.AdcAvailable);
+            Assert.IsTrue(snap.AdcUpdated);
+            Assert.AreEqual(5, snap.AdcChannels.Length);
+
+            worker.ConfigureSpiAdc(true, 3, 1, 20);
+            Thread.Sleep(80);
+            snap = worker.Snapshot();
+            Assert.AreEqual((byte)3, snap.AdcBusId);
+            Assert.AreEqual((byte)1, snap.AdcCsIdx);
+            Assert.AreEqual((byte)20, snap.AdcPeriodMs);
 
             worker.Enable(true);
             Thread.Sleep(50);

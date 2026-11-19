@@ -32,6 +32,7 @@
                     <panels:StepperPanel x:Name="PanelStepper"/>
                     <panels:GripperPanel x:Name="PanelGripper"/>
                     <panels:HapticPanel x:Name="PanelHaptic"/>
+                    <panels:AdcPanel x:Name="PanelAdc"/>
                     <panels:RecordingPanel x:Name="PanelRecording"/>
                 </StackPanel>
             </ScrollViewer>

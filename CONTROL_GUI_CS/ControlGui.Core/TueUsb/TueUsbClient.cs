@@ -90,6 +90,17 @@ namespace ControlGui.Core.TueUsb
         private readonly Stopwatch _mockUptime = Stopwatch.StartNew();
         private readonly Dictionary<byte, short> _mockServoPos = new() { { 1, 2048 }, { 2, 2048 } };
 
+        // SPI ADC feedback mock state
+        private byte _mockAdcSeq = 0;
+        private byte _mockAdcStatus = 0x01;
+        private byte _mockAdcEnabled = 1;
+        private byte _mockAdcBus = 1;
+        private byte _mockAdcCs = 0;
+        private byte _mockAdcPeriod = 10;
+        private ushort _mockAdcRxOk = 0;
+        private ushort _mockAdcCrcErr = 0;
+        private uint _mockAdcTotal = 0;
+
         public Action<Frame>? OnTx { get; set; }
         public Action<Frame>? OnRx { get; set; }
         public Action<Frame>? OnAsync { get; set; }
@@ -351,6 +362,22 @@ namespace ControlGui.Core.TueUsb
             }
         }
 
+        private ushort[] BuildMockAdcChannels()
+        {
+            double t = _mockUptime.Elapsed.TotalSeconds;
+            var ch = new ushort[5];
+            for (int i = 0; i < 5; i++)
+            {
+                ch[i] = (ushort)Math.Clamp((int)(2048 + 1800 * Math.Sin(t * 0.8 + i * 0.9)), 0, 4095);
+            }
+            return ch;
+        }
+
+        private static void WriteUInt16(byte[] buffer, int offset, ushort value)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(offset, 2), value);
+        }
+
         private List<Frame> SimulateMockResponse(Frame req)
         {
             var res = new List<Frame>();
@@ -554,6 +581,55 @@ namespace ControlGui.Core.TueUsb
                 BinaryPrimitives.WriteInt16LittleEndian(payload.AsSpan(4, 2), 150); // 150mA
                 res.Add(new Frame(FrameType.RespOk, id, payload, seq));
             }
+            else if (id == CanId.SensorAdcCh0_3 || id == CanId.SensorAdcCh4Meta || id == CanId.SensorAdcAll)
+            {
+                ushort[] ch = BuildMockAdcChannels();
+                _mockAdcSeq++;
+                if (_mockAdcRxOk < ushort.MaxValue) _mockAdcRxOk++;
+                _mockAdcTotal++;
+
+                byte[] payload = new byte[8];
+                if (id == CanId.SensorAdcCh0_3)
+                {
+                    for (int i = 0; i < 4; i++) WriteUInt16(payload, i * 2, ch[i]);
+                }
+                else if (id == CanId.SensorAdcCh4Meta)
+                {
+                    WriteUInt16(payload, 0, ch[4]);
+                    payload[2] = _mockAdcSeq;
+                    payload[3] = _mockAdcStatus;
+                    WriteUInt16(payload, 4, _mockAdcRxOk);
+                    WriteUInt16(payload, 6, _mockAdcCrcErr);
+                }
+                else
+                {
+                    ulong packed = 0;
+                    for (int i = 0; i < 5; i++)
+                    {
+                        packed |= (ulong)(ch[i] & 0xFFF) << (12 * i);
+                    }
+                    packed |= (ulong)(_mockAdcStatus & 0x0F) << 60;
+                    BinaryPrimitives.WriteUInt64LittleEndian(payload, packed);
+                }
+                res.Add(new Frame(FrameType.RespOk, id, payload, seq));
+            }
+            else if (id == CanId.SensorSpiCtrl)
+            {
+                if (p.Length >= 4)
+                {
+                    _mockAdcEnabled = p[0];
+                    _mockAdcBus = p[1];
+                    _mockAdcCs = p[2];
+                    _mockAdcPeriod = p[3];
+                }
+                byte[] payload = new byte[8];
+                payload[0] = _mockAdcEnabled;
+                payload[1] = _mockAdcBus;
+                payload[2] = _mockAdcCs;
+                payload[3] = _mockAdcPeriod;
+                BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4, 4), _mockAdcTotal);
+                res.Add(new Frame(FrameType.RespOk, id, payload, seq));
+            }
             else
             {
                 res.Add(new Frame(FrameType.RespOk, id, p, seq));
@@ -686,6 +762,39 @@ namespace ControlGui.Core.TueUsb
         {
             var resp = Transact(new Frame(FrameType.Req, CanId.HapticDiag));
             return Decoders.HapticUartDiag(resp.Payload);
+        }
+
+        public SpiAdcFeedback ReadSpiAdc(int? csIdx = null, double? timeoutSec = null)
+        {
+            var respAll = Transact(
+                new Frame(FrameType.Req, CanId.SensorAdcAll, Encoders.SensorAdcReq(csIdx)),
+                timeoutSec);
+            var (channels, status) = Decoders.SensorAdcAll(respAll.Payload);
+
+            var respMeta = Transact(
+                new Frame(FrameType.Req, CanId.SensorAdcCh4Meta, Encoders.SensorAdcReq(csIdx)),
+                timeoutSec);
+            var (_, seq, _, rxOk, crcErr) = Decoders.SensorAdcCh4Meta(respMeta.Payload);
+
+            return new SpiAdcFeedback(channels, seq, status, rxOk, crcErr);
+        }
+
+        public SpiAdcCtrlStatus ConfigureSpiAdc(bool enable = true, byte busId = 1, byte csIdx = 0,
+            byte periodMs = 10, double? timeoutSec = null)
+        {
+            var resp = Transact(
+                new Frame(FrameType.Req, CanId.SensorSpiCtrl,
+                    Encoders.SensorSpiCtrl(enable, busId, csIdx, periodMs)),
+                timeoutSec);
+            return Decoders.SensorSpiCtrl(resp.Payload);
+        }
+
+        public SpiAdcCtrlStatus GetSpiAdcStatus(double? timeoutSec = null)
+        {
+            var resp = Transact(
+                new Frame(FrameType.Req, CanId.SensorSpiCtrl, Array.Empty<byte>()),
+                timeoutSec);
+            return Decoders.SensorSpiCtrl(resp.Payload);
         }
 
         public void Dispose()

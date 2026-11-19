@@ -132,6 +132,14 @@ changes are required for the master.
   - `MotorWorker` probes the ADC at connect, polls it with the motor telemetry and
     publishes it in `MotorSnapshot`; the panel is in the left column.
   - Example: `STM32_FIRMWARE/python/examples/read_spi_adc.py`.
+- `STM32_FIRMWARE/python/gui/app.py` (launched by `run_gui.py`):
+  - New **"ADC (SPI slave)"** tab listing `0x500`, `0x501`, `0x502` and `0x503`, with
+    slave-index selection, polling enable/bus/CS/period, Apply/Query and a response log.
+- `CONTROL_GUI_CS` (.NET 8 WPF):
+  - `TueUsb` gains the four IDs, payload models/encoders/decoders, client methods and
+    mock responses; `MotorWorker`/`MotorSnapshot` probe and poll the ADC.
+  - `Panels/AdcPanel.xaml/.cs` adds the live CH0–CH4 panel to the left column, wired to
+    `0x502` for bus/CS/period. See `CONTROL_GUI_CS/ADC_FEEDBACK_REPORT.md`.
 
 > Remaining work: physical bench validation (TODO Phase D) and the optional ASYNC
 > streaming path.

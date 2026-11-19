@@ -37,5 +37,22 @@ namespace ControlGui.Core.Motor
         public string HapticPing { get; init; } = "";
         public bool HapticPingOk { get; init; } = false;
         public bool HapticPingPending { get; init; } = false;
+
+        public bool AdcAvailable { get; init; } = false;
+        public bool AdcUpdated { get; init; } = false;
+        public ushort[] AdcChannels { get; init; } = new ushort[5];
+        public byte AdcSeq { get; init; } = 0;
+        public byte AdcStatus { get; init; } = 0;
+        public bool AdcValid { get; init; } = false;
+        public bool AdcError { get; init; } = false;
+        public ushort AdcRxOk { get; init; } = 0;
+        public ushort AdcCrcErr { get; init; } = 0;
+        public double AdcHz { get; init; } = 0.0;
+        public bool AdcEnabled { get; init; } = true;
+        public byte AdcBusId { get; init; } = 1;
+        public byte AdcCsIdx { get; init; } = 0;
+        public byte AdcPeriodMs { get; init; } = 10;
+        public uint AdcTotalFrames { get; init; } = 0;
+        public string AdcLastError { get; init; } = "";
     }
 }

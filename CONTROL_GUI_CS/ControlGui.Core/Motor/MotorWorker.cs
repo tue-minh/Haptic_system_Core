@@ -28,6 +28,9 @@ namespace ControlGui.Core.Motor
         private bool _servoOnline = false;
         private int _servoConsecutiveErrors = 0;
         private int _consecutiveErrors = 0;
+        private bool _adcAvailable = true;
+        private readonly Stopwatch _adcRateSw = Stopwatch.StartNew();
+        private int _adcRateCount = 0;
 
         public string Port { get; }
         public int BaudRate { get; }
@@ -336,6 +339,70 @@ namespace ControlGui.Core.Motor
             _wakeEvent.Set();
         }
 
+        public void ConfigureSpiAdc(bool enable = true, byte busId = 1, byte csIdx = 0, byte periodMs = 10)
+        {
+            _commandQueue.Enqueue(c =>
+            {
+                try
+                {
+                    var ctrl = c.ConfigureSpiAdc(enable, busId, csIdx, periodMs);
+                    _adcAvailable = true;
+                    Update(s => s with
+                    {
+                        AdcAvailable = true,
+                        AdcEnabled = ctrl.Enabled,
+                        AdcBusId = ctrl.BusId,
+                        AdcCsIdx = ctrl.CsIdx,
+                        AdcPeriodMs = ctrl.PeriodMs,
+                        AdcTotalFrames = ctrl.TotalFrames,
+                        AdcLastError = ""
+                    });
+                    _log($"[motor {Port}] SPI ADC config: {ctrl}");
+                }
+                catch (Exception ex)
+                {
+                    _adcAvailable = false;
+                    Update(s => s with { AdcAvailable = false, AdcLastError = ex.Message });
+                    _log($"[motor {Port}] SPI ADC config failed: {ex.Message}");
+                }
+            });
+            _wakeEvent.Set();
+        }
+
+        public void ReadSpiAdc()
+        {
+            _commandQueue.Enqueue(c =>
+            {
+                try
+                {
+                    PublishAdc(c.ReadSpiAdc());
+                }
+                catch (Exception ex)
+                {
+                    Update(s => s with { AdcLastError = ex.Message });
+                    _log($"[motor {Port}] SPI ADC read failed: {ex.Message}");
+                }
+            });
+            _wakeEvent.Set();
+        }
+
+        private void PublishAdc(SpiAdcFeedback fb)
+        {
+            Update(s => s with
+            {
+                AdcAvailable = true,
+                AdcUpdated = true,
+                AdcChannels = fb.Channels,
+                AdcSeq = fb.Seq,
+                AdcStatus = fb.Status,
+                AdcValid = fb.AdcValid,
+                AdcError = fb.AdcError,
+                AdcRxOk = fb.RxOkCnt,
+                AdcCrcErr = fb.CrcErrCnt,
+                AdcLastError = ""
+            });
+        }
+
         public void PingHaptic(byte token = 0)
         {
             if (_client == null || !_client.IsConnected)
@@ -506,7 +573,36 @@ namespace ControlGui.Core.Motor
                 _log($"[motor {Port}] Servo probe: {ex.Message}");
             }
 
+            ProbeSpiAdc(c);
+
             return true;
+        }
+
+        private void ProbeSpiAdc(TueUsbClient c)
+        {
+            try
+            {
+                var ctrl = c.GetSpiAdcStatus();
+                _adcAvailable = true;
+                Update(s => s with
+                {
+                    AdcAvailable = true,
+                    AdcEnabled = ctrl.Enabled,
+                    AdcBusId = ctrl.BusId,
+                    AdcCsIdx = ctrl.CsIdx,
+                    AdcPeriodMs = ctrl.PeriodMs,
+                    AdcTotalFrames = ctrl.TotalFrames,
+                    AdcLastError = ""
+                });
+                PublishAdc(c.ReadSpiAdc());
+                _log($"[motor {Port}] SPI ADC feedback ready: {ctrl}");
+            }
+            catch (Exception ex)
+            {
+                _adcAvailable = false;
+                Update(s => s with { AdcAvailable = false, AdcLastError = ex.Message });
+                _log($"[motor {Port}] SPI ADC feedback unavailable: {ex.Message}");
+            }
         }
 
         private void WorkerLoop()
@@ -600,6 +696,32 @@ namespace ControlGui.Core.Motor
             {
                 NoteError(ex, "poll");
                 return;
+            }
+
+            if (_adcAvailable)
+            {
+                try
+                {
+                    PublishAdc(c.ReadSpiAdc());
+                    _adcRateCount++;
+                    if (_adcRateSw.ElapsedMilliseconds >= 1000)
+                    {
+                        double hz = _adcRateCount / _adcRateSw.Elapsed.TotalSeconds;
+                        _adcRateCount = 0;
+                        _adcRateSw.Restart();
+                        Update(s => s with { AdcHz = hz });
+                    }
+                }
+                catch (TueUsbException ex) when (ex.Code == ErrorCode.ErrUnknownCanId || ex.Code == ErrorCode.ErrNotSupported)
+                {
+                    _adcAvailable = false;
+                    Update(s => s with { AdcAvailable = false, AdcLastError = ex.Message });
+                    _log($"[motor {Port}] SPI ADC feedback not supported by this firmware");
+                }
+                catch (Exception ex)
+                {
+                    Update(s => s with { AdcLastError = ex.Message });
+                }
             }
 
             if (_servoOnline)

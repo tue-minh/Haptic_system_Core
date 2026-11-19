@@ -52,6 +52,9 @@ from PyQt6.QtWidgets import (
 )
 
 from tue_usb import (
+    CanId,
+    Decoders,
+    Encoders,
     LedState,
     ServoMode,
     TueUsbClient,
@@ -109,6 +112,7 @@ class TueUsbApp(QMainWindow):
         self.tabs.addTab(self._build_raw_stepper_tab(), "Raw Stepper")
         self.tabs.addTab(self._build_servo_tab(), "Servo (STS3215)")
         self.tabs.addTab(self._build_dc_tab(), "DC Motors (DRV8872)")
+        self.tabs.addTab(self._build_adc_tab(), "ADC (SPI slave)")
         root.addWidget(self.tabs)
 
         self.status = QStatusBar()
@@ -497,6 +501,60 @@ class TueUsbApp(QMainWindow):
         cg.setColumnStretch(5, 1)
 
         fbox, self.log_dc = self._feedback_box("DC Motor Feedback")
+        return self._assemble_tab([pbox, cbox], fbox)
+
+    # ==================================================================
+    # Tab: SPI ADC feedback (0x500-0x503)
+    # ==================================================================
+
+    def _build_adc_tab(self) -> QWidget:
+        pbox, pg = self._grid_box("Parameters")
+        pg.addWidget(QLabel("Slave index:"), 0, 0)
+        self.cmb_adc_slave = QComboBox()
+        self.cmb_adc_slave.addItem("Active (0x502 config)", None)
+        for idx in range(6):
+            bus = "SPI1" if idx < 3 else "SPI3"
+            cs = idx % 3 + 1
+            self.cmb_adc_slave.addItem(f"{idx} - {bus} CS{cs}", idx)
+        pg.addWidget(self.cmb_adc_slave, 0, 1)
+
+        self.chk_adc_enable = QCheckBox("Polling enabled")
+        self.chk_adc_enable.setChecked(True)
+        pg.addWidget(self.chk_adc_enable, 0, 2)
+
+        pg.addWidget(QLabel("Bus:"), 1, 0)
+        self.cmb_adc_bus = QComboBox()
+        self.cmb_adc_bus.addItem("SPI1", 1)
+        self.cmb_adc_bus.addItem("SPI3", 3)
+        pg.addWidget(self.cmb_adc_bus, 1, 1)
+
+        pg.addWidget(QLabel("Chip select:"), 1, 2)
+        self.cmb_adc_cs = QComboBox()
+        for idx in range(3):
+            self.cmb_adc_cs.addItem(f"CS{idx + 1}", idx)
+        pg.addWidget(self.cmb_adc_cs, 1, 3)
+
+        pg.addWidget(QLabel("Period (ms):"), 1, 4)
+        self.spn_adc_period = self._spin(1, 255, 10, 80)
+        pg.addWidget(self.spn_adc_period, 1, 5)
+
+        cbox, cg = self._grid_box("Commands")
+        r = 0
+        self._cmd_row(cg, r, "0x500 SENSOR_ADC_CH0_3",
+                      [("Read CH0-3", self._do_adc_ch0_3)]); r += 1
+        self._cmd_row(cg, r, "0x501 SENSOR_ADC_CH4_META",
+                      [("Read CH4 + meta", self._do_adc_ch4_meta)]); r += 1
+        self._cmd_row(cg, r, "0x502 SENSOR_SPI_CTRL", [
+            ("Apply config", self._do_adc_ctrl_apply),
+            ("Query status", self._do_adc_ctrl_query),
+        ]); r += 1
+        self._cmd_row(cg, r, "0x503 SENSOR_ADC_ALL",
+                      [("Read all 5", self._do_adc_all)]); r += 1
+        self._cmd_row(cg, r, "0x503 + 0x501 READ_SPI_ADC",
+                      [("Read all + meta", self._do_adc_read)]); r += 1
+        cg.setColumnStretch(3, 1)
+
+        fbox, self.log_adc = self._feedback_box("ADC Feedback")
         return self._assemble_tab([pbox, cbox], fbox)
 
     # ==================================================================
@@ -949,6 +1007,101 @@ class TueUsbApp(QMainWindow):
             f"0x607 DC_CONFIG_FREQ {khz}kHz",
             lambda: self.client.dc_set_frequency(khz),
             lambda hz: f"actual_frequency={hz} Hz ({hz / 1000.0:.1f} kHz)",
+        )
+
+    # ==================================================================
+    # SPI ADC command handlers
+    # ==================================================================
+
+    def _adc_slave_index(self):
+        return self.cmb_adc_slave.currentData()
+
+    @staticmethod
+    def _fmt_adc_status(status: int) -> str:
+        flags = []
+        if status & 0x01:
+            flags.append("valid")
+        if status & 0x02:
+            flags.append("ADC-ERR")
+        return f"0x{status:02X} [{', '.join(flags) or 'none'}]"
+
+    def _do_adc_ch0_3(self):
+        cs = self._adc_slave_index()
+
+        def fmt(frame):
+            ch = Decoders.sensor_adc_ch0_3(frame.payload)
+            return "CH0..3 = " + ", ".join(str(v) for v in ch)
+
+        self._run(
+            self.log_adc, "0x500 SENSOR_ADC_CH0_3",
+            lambda: self.client.transact(
+                CanId.SENSOR_ADC_CH0_3, Encoders.sensor_adc_req(cs)),
+            fmt,
+        )
+
+    def _do_adc_ch4_meta(self):
+        cs = self._adc_slave_index()
+
+        def fmt(frame):
+            ch4, seq, status, ok, crc = Decoders.sensor_adc_ch4_meta(frame.payload)
+            return (f"CH4={ch4}, seq={seq}, status={self._fmt_adc_status(status)}, "
+                    f"rx_ok={ok}, crc_err={crc}")
+
+        self._run(
+            self.log_adc, "0x501 SENSOR_ADC_CH4_META",
+            lambda: self.client.transact(
+                CanId.SENSOR_ADC_CH4_META, Encoders.sensor_adc_req(cs)),
+            fmt,
+        )
+
+    def _do_adc_all(self):
+        cs = self._adc_slave_index()
+
+        def fmt(frame):
+            channels, status = Decoders.sensor_adc_all(frame.payload)
+            values = ", ".join(f"CH{i}={v}" for i, v in enumerate(channels))
+            return f"{values} | status={self._fmt_adc_status(status)}"
+
+        self._run(
+            self.log_adc, "0x503 SENSOR_ADC_ALL",
+            lambda: self.client.transact(
+                CanId.SENSOR_ADC_ALL, Encoders.sensor_adc_req(cs)),
+            fmt,
+        )
+
+    def _do_adc_ctrl_apply(self):
+        enable = self.chk_adc_enable.isChecked()
+        bus = self.cmb_adc_bus.currentData()
+        cs = self.cmb_adc_cs.currentData()
+        period = self.spn_adc_period.value()
+        self._run(
+            self.log_adc,
+            f"0x502 SENSOR_SPI_CTRL(enable={int(enable)}, bus=SPI{bus}, cs={cs}, {period} ms)",
+            lambda: self.client.configure_spi_adc(enable, bus, cs, period),
+        )
+
+    def _do_adc_ctrl_query(self):
+        self._run(
+            self.log_adc, "0x502 SENSOR_SPI_CTRL(QUERY)",
+            self.client.get_spi_adc_status,
+        )
+
+    def _do_adc_read(self):
+        cs = self._adc_slave_index()
+
+        def fmt(fb):
+            mv = fb.millivolts()
+            values = ", ".join(
+                f"CH{i}={raw} ({volts:.1f} mV)"
+                for i, (raw, volts) in enumerate(zip(fb.channels, mv))
+            )
+            return (f"{values} | seq={fb.seq}, status={self._fmt_adc_status(fb.status)}, "
+                    f"rx_ok={fb.rx_ok_cnt}, crc_err={fb.crc_err_cnt}")
+
+        self._run(
+            self.log_adc, "0x503 + 0x501 READ_SPI_ADC",
+            lambda: self.client.read_spi_adc(cs),
+            fmt,
         )
 
 

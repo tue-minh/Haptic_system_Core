@@ -32,9 +32,9 @@ CONTROL_GUI_CS/
 │   │   └── Stm32HapticStreamer.cs     # 100 Hz regulated streaming thread (1 ms winmm multimedia timer)
 │   ├── Motor/                         # Stepper & Gripper Motion Subsystem
 │   │   ├── MotorConstants.cs          # Velocity/accel limits, gripper presets (55 open / 420 close)
-│   │   ├── MotorSnapshot.cs           # Thread-safe immutable telemetry snapshot
+│   │   ├── MotorSnapshot.cs           # Thread-safe immutable telemetry snapshot (incl. SPI ADC feedback)
 │   │   ├── LockedSerialPort.cs        # Thread-safe write multiplexing (motor control + 100 Hz haptic frames)
-│   │   └── MotorWorker.cs             # Background thread with urgent E-stop queue & 15 Hz telemetry poll
+│   │   └── MotorWorker.cs             # Background thread with urgent E-stop queue, 15 Hz telemetry + ADC poll
 │   ├── Recording/                     # Synchronized Data Recording & High-Speed CSV Logging
 │   │   ├── RecordingSchema.cs         # 345-column master schema and 171-column per-sensor schema
 │   │   ├── CsvRecorder.cs             # Buffered background writer for individual sensor files
@@ -56,13 +56,14 @@ CONTROL_GUI_CS/
 │   │   ├── StepperPanel.xaml/.cs      # Stepper telemetry (XYZ), driver enable, speed/accel, jog cross, E-stop
 │   │   ├── GripperPanel.xaml/.cs      # STS3215 Servo control, bus scan, ping, presets (55 open / 420 close)
 │   │   ├── HapticPanel.xaml/.cs       # 100 Hz haptic streaming toggle, CAN 0x300 info, ESP32 UART ping
+│   │   ├── AdcPanel.xaml/.cs          # STM32F103 SPI ADC slave: CH0-CH4 raw/mV/bars, seq/status/counters
 │   │   ├── RecordingPanel.xaml/.cs    # Master recording controls, elapsed time, row counter, directory picker
 │   │   └── SensorMonitorPanel.xaml/.cs# 2D scrolling curves, direction selector, Tare L/R/Both, metrics grid
 │   ├── MainWindow.xaml/.cs            # Window layout, 30 FPS DispatcherTimer, safety watchdog
 │   └── App.xaml/.cs                   # Application entry point, styling and visual templates
 └── ControlGui.Tests/                  # Comprehensive MSTest Suite
-    └── CoreTests.cs                   # 12 Unit tests verifying CRC-8, framing, state machine, haptic synthesis,
-                                       # LRC checksums, metrics, mock engine, and 345-col recording schemas
+    └── CoreTests.cs                   # 17 Unit tests verifying CRC-8, framing, state machine, haptic synthesis,
+                                       # SPI ADC codec/mock/worker, LRC checksums, metrics, mock engine, and 345-col schemas
 ```
 
 ---
@@ -87,6 +88,7 @@ CONTROL_GUI_CS/
    - **3D Tactile Surface & Quiver**: 3D point cloud projected with real-time mouse-drag rotation (azimuth & elevation) and 3D resultant force arrow.
    - **Haptic Valve Map**: 5 pneumatic chambers (A/B/C underside pad Tip $\to$ Base, D/E flanks) colored by commanded force with raw wire bytes and age.
    - **Real-time 2D Force History**: High-speed scrolling curves ($Fz, Fx, Fy, |F|, Ft$) with direction filtering.
+   - **ITV Valve ADC Panel**: live CH0–CH4 raw counts, millivolts and level bars from the STM32F103 SPI slave (CAN `0x500`–`0x503`), with editable bus/CS/period (`0x502`).
 
 5. **Single-File SQLite Telemetry Export (Replaces CSV)**:
    - All recordings are saved into a single SQLite database (`recordings.db`).
@@ -128,6 +130,6 @@ dotnet run --project ControlGui.Wpf
 
 | Role | Interface | Default Baud | Description |
 |:---|:---|:---|:---|
-| **STM32 (Motor + Haptic)** | USB Virtual COM Port | `1,000,000` | CoreXY + Z steppers, STS3215 gripper servo, 100 Hz haptic frames (CAN `0x300`), ESP32 relay (CAN `0x301`) |
+| **STM32 (Motor + Haptic)** | USB Virtual COM Port | `1,000,000` | CoreXY + Z steppers, STS3215 gripper servo, 100 Hz haptic frames (CAN `0x300`), ESP32 relay (CAN `0x301`), ITV valve ADC feedback (CAN `0x500`–`0x503`) |
 | **Left Sensor** | USB-UART Converter | `921,600` | PaXini PX6AX-GEN3 DP-S2015-Elite tactile sensor (52 taxels) |
 | **Right Sensor** | USB-UART Converter | `921,600` | PaXini PX6AX-GEN3 DP-S2015-Elite tactile sensor (52 taxels) |

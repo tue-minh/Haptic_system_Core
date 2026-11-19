@@ -63,6 +63,10 @@ namespace ControlGui.Wpf
             PanelHaptic.EnabledChanged += OnHapticToggled;
             PanelHaptic.PingRequested += OnPingEsp32;
 
+            // SPI ADC Panel
+            PanelAdc.ApplyRequested += OnAdcApply;
+            PanelAdc.ReadRequested += OnAdcRead;
+
             // Recording Panel
             PanelRecording.StartRequested += OnStartRecording;
             PanelRecording.StopRequested += OnStopRecording;
@@ -135,6 +139,7 @@ namespace ControlGui.Wpf
                 }
                 PanelStepper.Bind(null);
                 PanelGripper.Bind(null);
+                PanelAdc.Clear();
                 PanelConnection.SetRoleStatus("motor", false, false, "Disconnected", "off");
             }
             else if (role == "sensor_l" && _sensorLinks.TryGetValue("L", out var linkL))
@@ -203,6 +208,22 @@ namespace ControlGui.Wpf
             _motor?.PingHaptic();
         }
 
+        private void OnAdcApply(bool enable, byte busId, byte csIdx, byte periodMs)
+        {
+            if (_motor == null)
+            {
+                PostLog("[main] SPI ADC: STM32 link is not connected");
+                return;
+            }
+            _motor.ConfigureSpiAdc(enable, busId, csIdx, periodMs);
+            PostLog($"[main] SPI ADC: request bus=SPI{busId} cs={csIdx} period={periodMs}ms enable={(enable ? 1 : 0)}");
+        }
+
+        private void OnAdcRead()
+        {
+            _motor?.ReadSpiAdc();
+        }
+
         private void OnStartRecording()
         {
             _recorder.Start(
@@ -237,6 +258,7 @@ namespace ControlGui.Wpf
 
             // 2. Poll motor
             var motorSnap = _motor?.Snapshot();
+            PanelAdc.Update(motorSnap);
             bool motorConnected = motorSnap != null && motorSnap.Connected;
             if (motorSnap != null)
             {

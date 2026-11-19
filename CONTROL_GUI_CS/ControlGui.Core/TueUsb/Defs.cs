@@ -124,6 +124,12 @@ namespace ControlGui.Core.TueUsb
         public const uint HapticPing = 0x301;
         public const uint HapticDiag = 0x302;
 
+        // Sensors / inputs (0x500 - 0x57F)
+        public const uint SensorAdcCh0_3 = 0x500;
+        public const uint SensorAdcCh4Meta = 0x501;
+        public const uint SensorSpiCtrl = 0x502;
+        public const uint SensorAdcAll = 0x503;
+
         public static bool IsReserved(uint canId)
         {
             return (canId >= 0x300 && canId <= 0x3FF) ||

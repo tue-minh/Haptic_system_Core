@@ -88,6 +88,34 @@ namespace ControlGui.Core.TueUsb
             $"rx={RxBytes}B err={RxErrors} last_ping_rx={LastPingRxBytes}B tx_fail={TxFail} timeouts={Timeouts} replies={Replies}";
     }
 
+    public record SpiAdcFeedback(ushort[] Channels, byte Seq, byte Status, ushort RxOkCnt, ushort CrcErrCnt)
+    {
+        public bool AdcValid => (Status & 0x01) != 0;
+        public bool AdcError => (Status & 0x02) != 0;
+
+        public double[] Millivolts(int vrefMv = 3300)
+        {
+            var mv = new double[Channels.Length];
+            for (int i = 0; i < Channels.Length; i++)
+            {
+                mv[i] = Channels[i] * (double)vrefMv / 4095.0;
+            }
+            return mv;
+        }
+
+        public override string ToString()
+        {
+            string ch = string.Join(", ", Channels);
+            return $"SpiAdc[{ch}] seq={Seq} status=0x{Status:X2} ok={RxOkCnt} crc_err={CrcErrCnt}";
+        }
+    }
+
+    public record SpiAdcCtrlStatus(bool Enabled, byte BusId, byte CsIdx, byte PeriodMs, uint TotalFrames)
+    {
+        public override string ToString() =>
+            $"SpiAdcCtrl(enabled={(Enabled ? 1 : 0)}, bus=SPI{BusId}, cs={CsIdx}, period={PeriodMs}ms, frames={TotalFrames})";
+    }
+
     public static class Encoders
     {
         public static byte[] SysPing(uint token = 0)
@@ -322,6 +350,16 @@ namespace ControlGui.Core.TueUsb
             p[0] = token;
             return p;
         }
+
+        public static byte[] SensorAdcReq(int? csIdx = null)
+        {
+            return csIdx.HasValue ? new byte[] { (byte)(csIdx.Value & 0xFF) } : Array.Empty<byte>();
+        }
+
+        public static byte[] SensorSpiCtrl(bool enable, byte busId = 1, byte csIdx = 0, byte periodMs = 10)
+        {
+            return new byte[] { (byte)(enable ? 1 : 0), busId, csIdx, periodMs };
+        }
     }
 
     public static class Decoders
@@ -450,6 +488,54 @@ namespace ControlGui.Core.TueUsb
             byte timeouts = payload[6];
             byte replies = payload[7];
             return new HapticUartDiag(flags, errs, rxBytes, lastRx, txFail, timeouts, replies);
+        }
+
+        public static (ushort ch0, ushort ch1, ushort ch2, ushort ch3) SensorAdcCh0_3(byte[] payload)
+        {
+            if (payload.Length < 8) throw new ArgumentException("SENSOR_ADC_CH0_3 payload must be 8 bytes");
+            return (
+                BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(0, 2)),
+                BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(2, 2)),
+                BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(4, 2)),
+                BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(6, 2))
+            );
+        }
+
+        public static (ushort ch4, byte seq, byte status, ushort rxOk, ushort crcErr) SensorAdcCh4Meta(byte[] payload)
+        {
+            if (payload.Length < 8) throw new ArgumentException("SENSOR_ADC_CH4_META payload must be 8 bytes");
+            return (
+                BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(0, 2)),
+                payload[2],
+                payload[3],
+                BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(4, 2)),
+                BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(6, 2))
+            );
+        }
+
+        public static (ushort[] channels, byte status) SensorAdcAll(byte[] payload)
+        {
+            if (payload.Length < 8) throw new ArgumentException("SENSOR_ADC_ALL payload must be 8 bytes");
+            ulong raw = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
+            var channels = new ushort[5];
+            for (int i = 0; i < 5; i++)
+            {
+                channels[i] = (ushort)((raw >> (12 * i)) & 0xFFF);
+            }
+            byte status = (byte)((raw >> 60) & 0x0F);
+            return (channels, status);
+        }
+
+        public static SpiAdcCtrlStatus SensorSpiCtrl(byte[] payload)
+        {
+            if (payload.Length < 8) throw new ArgumentException("SENSOR_SPI_CTRL payload must be 8 bytes");
+            return new SpiAdcCtrlStatus(
+                Enabled: payload[0] != 0,
+                BusId: payload[1],
+                CsIdx: payload[2],
+                PeriodMs: payload[3],
+                TotalFrames: BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(4, 4))
+            );
         }
     }
 }
