@@ -36,7 +36,7 @@
         {
             "label": "Flash Firmware - Black Magic Probe",
             "type": "shell",
-            "command": "arm-none-eabi-gdb",
+            "command": "gdb-multiarch",
             "args": [
                 "-x",
                 "${workspaceFolder}/.vscode/flash.gdb"

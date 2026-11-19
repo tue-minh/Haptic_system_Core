@@ -101,11 +101,11 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   MX_USART1_UART_Init();
-  // MX_CAN1_Init();
-  // MX_I2C1_Init();
-  // MX_SPI3_Init();
+  MX_CAN1_Init();
+  MX_I2C1_Init();
+  MX_SPI3_Init();
   MX_USART2_UART_Init();
-  // MX_SPI1_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
   /* Steppers: TIM1 becomes the 1 us step clock and the STEP pins are turned
    * into plain GPIO outputs. See docs/STEPPER_INSTRUCTION.md. */
@@ -120,9 +120,8 @@ int main(void)
   osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
   MX_FREERTOS_Init();
 
-//   /* Start scheduler */
+  /* Start scheduler */
   osKernelStart();
-
 
   /* We should never get here as control is now taken by the scheduler */
 

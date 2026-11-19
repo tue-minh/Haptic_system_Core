@@ -1219,10 +1219,10 @@
 			[
 				{
 					"name" : "HELPSTRING",
-					"value" : "The CMake toolchain file"
+					"value" : "No help, variable specified on the command line."
 				}
 			],
-			"type" : "FILEPATH",
+			"type" : "UNINITIALIZED",
 			"value" : "C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE_SLAVE/cmake/gcc-arm-none-eabi.cmake"
 		},
 		{

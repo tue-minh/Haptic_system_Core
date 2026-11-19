@@ -49,8 +49,11 @@ typedef struct __attribute__((packed))
 #define ITV_CH_COUNT          5U
 #define ADC_REF_MV            3300U
 #define ADC_MAX_COUNT         4095U
-#define ADC_SAMPLE_PERIOD_MS  20U
-#define DEFAULT_LOG_PERIOD_MS 100U
+#define ADC_OFFSET_MV         200U
+#define ADC_OFFSET_COUNTS     (((ADC_OFFSET_MV * ADC_MAX_COUNT) + (ADC_REF_MV / 2U)) / ADC_REF_MV)
+#define ADC_FILTER_LEN        8U
+#define ADC_SAMPLE_PERIOD_MS  10U
+#define DEFAULT_LOG_PERIOD_MS 50U
 #define MIN_LOG_PERIOD_MS     20U
 #define MAX_LOG_PERIOD_MS     10000U
 #define UART_TX_BUF_SIZE      192U
@@ -70,6 +73,10 @@ typedef struct __attribute__((packed))
 /* USER CODE BEGIN PV */
 static volatile uint16_t adc_dma_buf[ITV_CH_COUNT];
 static volatile uint16_t adc_latest[ITV_CH_COUNT];
+static uint16_t          adc_ring[ITV_CH_COUNT][ADC_FILTER_LEN];
+static uint32_t          adc_sum[ITV_CH_COUNT];
+static uint8_t           adc_ring_idx = 0U;
+static uint8_t           adc_ring_primed = 0U;
 static volatile uint8_t  adc_busy = 0U;
 static volatile uint8_t  adc_data_ready = 0U;
 static volatile uint8_t  adc_valid = 0U;
@@ -431,6 +438,7 @@ int main(void)
     {
       last_sample_tick = now;
       adc_busy = 1U;
+      HAL_GPIO_TogglePin(led_GPIO_Port, led_Pin);
       if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_dma_buf, ITV_CH_COUNT) != HAL_OK)
       {
         adc_busy = 0U;
@@ -531,10 +539,36 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
   if (hadc->Instance == ADC1)
   {
-    for (uint32_t i = 0U; i < ITV_CH_COUNT; i++)
+    if (adc_ring_primed == 0U)
     {
-      adc_latest[i] = adc_dma_buf[i];
+      for (uint32_t i = 0U; i < ITV_CH_COUNT; i++)
+      {
+        uint16_t raw = adc_dma_buf[i];
+        uint16_t val = (raw > ADC_OFFSET_COUNTS) ? (uint16_t)(raw - ADC_OFFSET_COUNTS) : 0U;
+        for (uint32_t k = 0U; k < ADC_FILTER_LEN; k++)
+        {
+          adc_ring[i][k] = val;
+        }
+        adc_sum[i] = (uint32_t)val * ADC_FILTER_LEN;
+        adc_latest[i] = val;
+      }
+      adc_ring_primed = 1U;
+      adc_ring_idx = 0U;
     }
+    else
+    {
+      for (uint32_t i = 0U; i < ITV_CH_COUNT; i++)
+      {
+        uint16_t raw = adc_dma_buf[i];
+        uint16_t val = (raw > ADC_OFFSET_COUNTS) ? (uint16_t)(raw - ADC_OFFSET_COUNTS) : 0U;
+        adc_sum[i] -= adc_ring[i][adc_ring_idx];
+        adc_ring[i][adc_ring_idx] = val;
+        adc_sum[i] += val;
+        adc_latest[i] = (uint16_t)((adc_sum[i] + (ADC_FILTER_LEN / 2U)) / ADC_FILTER_LEN);
+      }
+      adc_ring_idx = (uint8_t)((adc_ring_idx + 1U) % ADC_FILTER_LEN);
+    }
+
     adc_seq++;
     adc_valid = 1U;
     adc_sample_count++;
@@ -632,6 +666,7 @@ void Error_Handler(void)
   __disable_irq();
   while (1)
   {
+    HAL_GPIO_TogglePin(led_GPIO_Port, led_Pin); HAL_Delay(50);
   }
   /* USER CODE END Error_Handler_Debug */
 }
