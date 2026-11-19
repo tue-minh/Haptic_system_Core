@@ -3,7 +3,7 @@
 > **Target MCU**: `STM32F407VETx` (`168 MHz` SYSCLK, `APB2 = 84 MHz`, `APB1 = 42 MHz`)  
 > **SPI Config**: `SPI1` (`2.625 MHz`, `CPOL=LOW`, `CPHA=1EDGE`, CS: `SPI1_CS1` `PB8`, `SPI1_CS2` `PB9`, `SPI1_CS3` `PE0`) and `SPI3` (`2.625 MHz`, CS: `SPI3_CS1` `PD4`, `SPI3_CS2` `PD3`, `SPI3_CS3` `PD2`)  
 > **Goal**: Select a slave chip via CS, continuously read all 5-channel ADC frames (`ItvSpiFrame_t`, 16 bytes) over SPI, and expose new USB CAN IDs (mirroring the UART bridge pattern) so the host PC can read the SPI ADC feedback.  
-> **Status**: Planning / TODO only — do **not** implement code from this document yet.
+> **Status**: Implemented — driver in `Core/Src/tue_spi_adc.c`, USB IDs `0x500`–`0x502` in `tue_usb_binary.c`. See [SPI_ADC_IMPLEMENTATION_REPORT.md](SPI_ADC_IMPLEMENTATION_REPORT.md). Hardware bench verification remains.
 
 ---
 
@@ -40,32 +40,32 @@ Because each USB binary frame has `TUE_USB_MAX_DLC = 8` bytes and 5x `uint16_t` 
 ## 3. TODO List
 
 ### Phase A: New SPI ADC Driver (`Core/Inc/tue_spi_adc.h`, `Core/Src/tue_spi_adc.c`)
-- [ ] **Define CS table & bus abstraction**:
+- [x] **Define CS table & bus abstraction**:
   - Map logical slave indices (e.g. `0..2` on `SPI1`: `PB8`, `PB9`, `PE0`; `3..5` on `SPI3`: `PD4`, `PD3`, `PD2`) to `(SPI_HandleTypeDef*, GPIO_TypeDef*, uint16_t pin)`.
-- [ ] **Implement `tue_spi_adc_init()`**:
+- [x] **Implement `tue_spi_adc_init()`**:
   - Verify all CS pins are `GPIO_PIN_SET` (HIGH / idle).
   - Initialize cached frame struct (`adc_raw[5]`, `seq`, `status`, `last_update_tick`, `rx_ok_cnt`, `crc_err_cnt`).
-- [ ] **Implement continuous CS-selected burst read (`tue_spi_adc_poll_burst()`)**:
-  - Assert selected CS LOW (`GPIO_PIN_RESET`), wait a short setup delay (e.g. `5–10 us`) for slave EXTI/DMA readiness.
-  - Perform `HAL_SPI_TransmitReceive(&hspi1, dummy_tx, rx_buf, 16, timeout)` (or `N x 16` bytes continuous read while CS stays LOW, with a short inter-frame gap if needed by the slave's `HAL_SPI_TxRxCpltCallback`).
+- [x] **Implement continuous CS-selected burst read (`tue_spi_adc_poll()`)**:
+  - Assert selected CS LOW (`GPIO_PIN_RESET`), wait a short setup delay for slave EXTI/DMA readiness.
+  - Perform `HAL_SPI_TransmitReceive(&hspiX, dummy_tx, rx_buf, 8 x 16, timeout)` while CS stays LOW.
   - Deassert CS HIGH (`GPIO_PIN_SET`).
-  - Validate `sof0 == 0xAA`, `sof1 == 0x55`, and `CRC16-CCITT`. On pass, atomically update the cached `adc_raw[5]`, `seq`, `status`, and increment `rx_ok_cnt`; on fail, increment `crc_err_cnt`.
-- [ ] **CRC-16 helper**:
-  - Implement `tue_spi_calc_crc16()` matching the slave (`poly=0x1021`, `init=0xFFFF`).
+  - Validate `sof0 == 0xAA`, `sof1 == 0x55`, and `CRC16-CCITT` with a sliding window. On pass, atomically update the cached `adc_raw[5]`, `seq`, `status`, and increment `rx_ok_cnt`; on fail, increment `crc_err_cnt`.
+- [x] **CRC-16 helper**:
+  - Implement `crc16_ccitt_false()` matching the slave (`poly=0x1021`, `init=0xFFFF`).
 
 ### Phase B: FreeRTOS Task Integration (`Core/Src/freertos.c`)
-- [ ] **Add a periodic SPI polling task** (or hook into the existing telemetry/bridge task):
-  - When enabled (`spi_adc_enabled == 1`), poll the active CS at the configured period (e.g. `10 ms` / `100 Hz`, or continuous burst mode).
-  - Use a mutex or critical section (`taskENTER_CRITICAL()` / `taskEXIT_CRITICAL()`) when copying the 5-channel `adc_raw[5]` cache for USB requests.
+- [x] **Add a periodic SPI polling task** (created by `tue_spi_adc_init()`, started from `tue_usb_init()`):
+  - When enabled (`s_enabled == 1`), poll the active CS at the configured period (default `10 ms` / `100 Hz`).
+  - Use a PRIMASK critical section when copying the 5-channel `adc_raw[5]` cache for USB requests.
 
 ### Phase C: USB Binary Protocol Handlers (`Core/Inc/tue_usb_binary.h`, `Core/Src/tue_usb_binary.c`)
-- [ ] **Register CAN IDs `0x500`, `0x501`, `0x502`** in `tue_usb_binary.h` with `TUE_USB_ASSERT_NOT_RESERVED`.
-- [ ] **Implement dispatch cases in `tue_usb_binary.c`**:
+- [x] **Register CAN IDs `0x500`, `0x501`, `0x502`** in `tue_usb_binary.h` with `TUE_USB_ASSERT_NOT_RESERVED`.
+- [x] **Implement dispatch cases in `tue_usb_binary.c`**:
   - `0x500` (`TUE_USB_CAN_SENSOR_ADC_CH0_3`): return `RESP_OK` with `adc_raw[0..3]` (`8` bytes).
   - `0x501` (`TUE_USB_CAN_SENSOR_ADC_CH4_META`): return `RESP_OK` with `adc_raw[4]`, `seq`, `status`, `rx_ok_cnt`, `crc_err_cnt` (`8` bytes).
   - `0x502` (`TUE_USB_CAN_SENSOR_SPI_CTRL`): configure active bus/CS/polling rate or query status.
-  - Optional: support `TUE_USB_FRAME_ASYNC` streaming if host-initiated polling (`0x500` + `0x501`) is not fast enough.
+  - [ ] Optional: support `TUE_USB_FRAME_ASYNC` streaming if host-initiated polling (`0x500` + `0x501`) is not fast enough.
 
 ### Phase D: Build & Hardware Verification
-- [ ] Build `STM32_FIRMWARE` cleanly with zero warnings on new `0x500–0x502` static asserts.
+- [x] Build `STM32_FIRMWARE` cleanly with zero warnings on new `0x500–0x502` static asserts.
 - [ ] Verify with `STM32_FIRMWARE_SLAVE` connected on `SPI1` (`PB3/PB4/PB5` + `PB8 -> PB6` CS) that `0x500` / `0x501` return live `PA0`–`PA4` values over USB.

@@ -28,6 +28,7 @@
 #include "usart.h"
 #include "tue_stepper.h"
 #include "tue_haptic_bridge.h"
+#include "tue_spi_adc.h"
 #include "usbd_cdc_if.h"
 #include "usbd_cdc.h"
 
@@ -107,6 +108,7 @@ static int      step_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dl
 static int      servo_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
 static int      dc_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
 static int      haptic_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
+static int      spi_adc_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
 
 static tue_usb_error_t servo_map_err(tue_sts3215_status_t st);
 static tue_usb_error_t step_map_err(tue_stepper_status_t st);
@@ -497,6 +499,10 @@ static void usb_dispatch(const tue_usb_frame_t *f, const uint8_t *raw,
                (f->can_id == TUE_USB_CAN_HAPTIC_DIAG)) {
         /* Ping the ESP32 slave over USART2, or report the local link state. */
         err = haptic_cmd(f, out, &out_dlc);
+    } else if ((f->can_id >= TUE_USB_CAN_SENSOR_ADC_CH0_3) &&
+               (f->can_id <= TUE_USB_CAN_SENSOR_SPI_CTRL)) {
+        /* Cached ITV valve ADC feedback acquired over SPI1/SPI3. */
+        err = spi_adc_cmd(f, out, &out_dlc);
     } else if (TUE_USB_CAN_ID_IS_RESERVED(f->can_id)) {
         err = (int)TUE_USB_ERR_NOT_SUPPORTED;
     } else {
@@ -538,6 +544,79 @@ static int haptic_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc)
 
     *out_dlc = TUE_HAPTIC_PAYLOAD_LEN;
     return (int)TUE_USB_ERR_OK;
+}
+
+/* ========================================================================== */
+/* SPI ADC feedback (0x500 - 0x502)                                           */
+/* ========================================================================== */
+
+static uint8_t spi_adc_requested_index(const tue_usb_frame_t *f)
+{
+    return (f->dlc >= 1U) ? f->payload[0] : tue_spi_adc_active_index();
+}
+
+static int spi_adc_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc)
+{
+    switch (f->can_id) {
+
+    case TUE_USB_CAN_SENSOR_ADC_CH0_3: {
+        uint8_t idx = spi_adc_requested_index(f);
+        if (!tue_spi_adc_valid_index(idx)) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+        tue_spi_adc_snapshot_t s;
+        tue_spi_adc_get_snapshot(idx, &s);
+        for (uint8_t ch = 0U; ch < 4U; ch++) {
+            wr_u16(&out[ch * 2U], s.adc_raw[ch]);
+        }
+        *out_dlc = 8U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_SENSOR_ADC_CH4_META: {
+        uint8_t idx = spi_adc_requested_index(f);
+        if (!tue_spi_adc_valid_index(idx)) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+        tue_spi_adc_snapshot_t s;
+        tue_spi_adc_get_snapshot(idx, &s);
+        wr_u16(&out[0], s.adc_raw[4]);
+        out[2] = s.seq;
+        out[3] = s.status;
+        wr_u16(&out[4], s.rx_ok_cnt);
+        wr_u16(&out[6], s.crc_err_cnt);
+        *out_dlc = 8U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_SENSOR_SPI_CTRL: {
+        if (f->dlc == 0U) {
+            /* query only */
+        } else if (f->dlc >= 4U) {
+            if (!tue_spi_adc_configure(f->payload[0] != 0U, f->payload[1],
+                                       f->payload[2], f->payload[3])) {
+                return (int)TUE_USB_ERR_BAD_ARG;
+            }
+        } else {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+
+        bool enabled;
+        uint8_t bus_id, cs_idx, period_ms;
+        uint32_t total;
+        tue_spi_adc_get_config(&enabled, &bus_id, &cs_idx, &period_ms, &total);
+        out[0] = enabled ? 1U : 0U;
+        out[1] = bus_id;
+        out[2] = cs_idx;
+        out[3] = period_ms;
+        wr_u32(&out[4], total);
+        *out_dlc = 8U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    default:
+        return (int)TUE_USB_ERR_UNKNOWN_CAN_ID;
+    }
 }
 
 /* ========================================================================== */
@@ -1278,6 +1357,9 @@ void tue_usb_init(void)
 
     /* Slave haptic link: USART2 @ 115200 baud, polling (no DMA/IRQ). */
     (void)tue_haptic_init();
+
+    /* SPI ADC feedback link: background poll of the STM32F103 slave. */
+    (void)tue_spi_adc_init();
 
     const osSemaphoreAttr_t sem_attr = { .name = "usb_rx" };
     s_rx_sem = osSemaphoreNew(1U, 0U, &sem_attr);

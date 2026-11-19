@@ -319,4 +319,12 @@ void USART1_IRQHandler(void)
 
 /* USER CODE BEGIN 1 */
 
+/**
+  * @brief This function handles EXTI line[9:5] interrupts (SPI1_NSS on PB6).
+  */
+void EXTI9_5_IRQHandler(void)
+{
+  HAL_GPIO_EXTI_IRQHandler(SPI1_NSS_Pin);
+}
+
 /* USER CODE END 1 */

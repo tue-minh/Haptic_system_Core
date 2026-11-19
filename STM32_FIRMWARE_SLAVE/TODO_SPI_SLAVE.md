@@ -2,7 +2,7 @@
 
 > **Target MCU**: `STM32F103C8Tx` (`72 MHz` SYSCLK, `SPI1` remapped on `PB3/PB4/PB5`, `SPI1_NSS` on `PB6`)  
 > **Goal**: Whenever the Master asserts CS (`PB6` LOW), continuously stream all 5 ADC channels (`PA0`–`PA4`) over `SPI1` using DMA.  
-> **Status**: Planning / TODO only — do **not** implement code from this document yet.
+> **Status**: Implemented — EXTI chip-select handling, pre-packed shadow frame and priority tuning are in `Core/Src/main.c`, `Core/Src/gpio.c`, `Core/Src/dma.c`. See [SPI_SLAVE_IMPLEMENTATION_REPORT.md](SPI_SLAVE_IMPLEMENTATION_REPORT.md). Logic-analyzer verification remains.
 
 ---
 
@@ -23,30 +23,28 @@
 ## 2. TODO List
 
 ### Phase A: Deterministic CS (`PB6`) Edge Handling
-- [ ] **Configure `PB6` (`SPI1_NSS`) as EXTI Rising + Falling** (in `.ioc` or `gpio.c` + `stm32f1xx_it.c` `EXTI9_5_IRQHandler`):
+- [x] **Configure `PB6` (`SPI1_NSS`) as EXTI Rising + Falling** (in `gpio.c` + `stm32f1xx_it.c` `EXTI9_5_IRQHandler`):
   - **Falling edge (`PB6` -> LOW, Master selected slave)**:
     - Ensure `SPI1` DMA is armed and ready if it was idle.
     - Track `spi_cs_active = 1` and reset any stale error flags (`__HAL_SPI_CLEAR_OVRFLAG(&hspi1)`).
   - **Rising edge (`PB6` -> HIGH, Master deselected slave)**:
     - Set `spi_cs_active = 0`.
-    - Abort any partial/in-flight DMA transfer (`HAL_SPI_Abort_IT` or flag for immediate rearm), pack a fresh `ItvSpiFrame_t`, and re-arm `HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE)` so the next CS assertion starts cleanly at byte 0 (`0xAA 0x55`).
-- [ ] **Protect against bus contention when deselected**:
-  - Verify `PB4` (`SPI1_MISO`) behavior when `SPI_NSS_SOFT` is used; if multiple slaves share `SPI1` MISO, evaluate switching `SPI1` to `SPI_NSS_HARD_INPUT` (note: hardware `SPI1_NSS` on STM32F103 remapped `SPI1` is `PA15`, whereas `PB6` is software-monitored `SPI1_NSS` — keep `SPI_NSS_SOFT` if wired to `PB6` and only connect point-to-point, or tristate MISO on rising edge if shared).
+    - Defer the abort/re-arm to thread context (`spi_cs_restart_pending`), where `HAL_SPI_Abort`/`HAL_SPI_TransmitReceive_DMA` pack a fresh frame (`0xAA 0x55`) so the next CS assertion starts cleanly at byte 0.
+- [x] **Protect against bus contention when deselected**:
+  - Kept `SPI_NSS_SOFT` because the master CS is wired to `PB6` (not the hardware remapped `PA15`). MISO is only driven while the SPI peripheral is enabled; keep the link point-to-point.
 
 ### Phase B: Continuous 5-Channel ADC Streaming While Selected
-- [ ] **Double-buffered / Ping-Pong TX refresh in `HAL_SPI_TxRxCpltCallback`**:
-  - While the master holds `PB6` LOW and keeps clocking continuously (`N x 16` bytes), `HAL_SPI_TxRxCpltCallback` fires every 16 bytes.
-  - Keep `HAL_SPI_TxRxCpltCallback` as fast as possible (no `HAL_SPI_Abort`, minimal copy) so the next 16-byte DMA transfer is armed within a few microseconds before the master's next byte clock arrives:
-    - Prepare the next 16-byte `ItvSpiFrame_t` in a shadow buffer inside the ADC conversion callback (`HAL_ADC_ConvCpltCallback`) or main loop whenever `adc_seq` updates.
-    - In `HAL_SPI_TxRxCpltCallback`, copy/swap the pre-packed 16-byte frame into `spi_tx_buf` and immediately call `HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE)`.
-- [ ] **Check DMA & SPI1 IRQ priorities**:
-  - Ensure `DMA1_Channel2_IRQn`, `DMA1_Channel3_IRQn`, and `SPI1_IRQn` have higher priority (lower numeric value, e.g. `0`) than `ADC1_2_IRQn` / `DMA1_Channel1_IRQn` / `USART1_IRQn` so continuous SPI TX re-arming is never delayed by UART logging.
-- [ ] **Handle `HAL_SPI_ErrorCallback`**:
-  - On `OVR` / `MODF` / DMA error, clear flags, increment `spi_error_count`, and re-arm only if `PB6 == GPIO_PIN_SET` (or wait for the next rising edge).
+- [x] **Double-buffered / Ping-Pong TX refresh in `HAL_SPI_TxRxCpltCallback`**:
+  - `HAL_ADC_ConvCpltCallback` pre-packs the next `ItvSpiFrame_t` into a shadow buffer (alternating front/back) so the SPI ISR only has to `memcpy` 16 bytes and re-arm.
+  - `HAL_SPI_TxRxCpltCallback` keeps the re-arm path minimal (no CRC computation in the ISR).
+- [x] **Check DMA & SPI1 IRQ priorities**:
+  - `DMA1_Channel2/3_IRQn` and `SPI1_IRQn` = `0`; `ADC1_2_IRQn` and `DMA1_Channel1_IRQn` = `1`; `USART1_IRQn` and `DMA1_Channel4/5_IRQn` = `2`.
+- [x] **Handle `HAL_SPI_ErrorCallback`**:
+  - On `OVR` / `MODF` / DMA error, clear flags, increment `spi_error_count`, and re-arm if the peripheral is ready; otherwise leave it to the deferred CS restart.
 
 ### Phase C: ADC Sampling Rate & Verification
-- [ ] **Review ADC sample period (`ADC_SAMPLE_PERIOD_MS`)**:
-  - Currently `10 ms` (100 Hz) with an 8-sample moving average (`ADC_FILTER_LEN = 8`). Decide if faster updates (e.g. `1–2 ms`) are needed for continuous SPI polling.
+- [x] **Review ADC sample period (`ADC_SAMPLE_PERIOD_MS`)**:
+  - Kept at `10 ms` (100 Hz) with the 8-sample moving average. This matches the master poll rate and the 100 Hz ITV feedback requirement; faster sampling only shortens the filter window without adding useful bandwidth.
 - [ ] **Test & Verify**:
-  - Verify continuous multi-frame burst (`e.g., 10 x 16 = 160 bytes` under a single CS LOW pulse) with logic analyzer / master firmware.
+  - Verify continuous multi-frame burst (e.g. `10 x 16 = 160 bytes` under a single CS LOW pulse) with logic analyzer / master firmware.
   - Confirm `SOF` (`0xAA 0x55`), incrementing `seq`, all 5 channels (`PA0`–`PA4`), and `CRC16` pass 100% of frames without byte shifts.

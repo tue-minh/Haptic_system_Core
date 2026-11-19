@@ -14,7 +14,7 @@
 - **4x DC Motors** (DRV8872 H-bridge drivers with fault inputs)
 - **Feetech STS3215 Smart Bus Servos** (half-duplex 1 Mbps UART)
 - **ESP32 Haptic Slave Bridge** (`USART2` @ 115200 baud)
-- **STM32F103 ADC Slave(s)** (`SPI1` / `SPI3` @ 2.625 MHz — see [TODO_SPI_MASTER.md](TODO_SPI_MASTER.md))
+- **STM32F103 ADC Slave(s)** (`SPI1` / `SPI3` @ 2.625 MHz — `tue_spi_adc.c/.h`, see [TODO_SPI_MASTER.md](TODO_SPI_MASTER.md))
 - **Auxiliary Buses**: `CAN1` (`PD0`/`PD1`), `I2C1` (`PB6`/`PB7`)
 
 ---
@@ -52,7 +52,7 @@ All host-to-MCU communication uses fixed-envelope CAN-over-USB frames over USB C
   - `0x280–0x281`: Raw per-motor stepping
   - `0x300–0x3FF`: **Reserved user custom range** (`0x300` Haptic Telemetry -> `USART2`, `0x301` Haptic Ping, `0x302` USART2 Link Diagnostics)
   - `0x400–0x415`: STS3215 bus servos (`PING`, `SET_POS`, `GET_POS`, `SET_SPEED`, `TORQUE`, `MODE`, `PWM`, `FB_*`, `MEM_*`)
-  - `0x500–0x57F`: Sensors / inputs (reserved for SPI ADC feedback — see [TODO_SPI_MASTER.md](TODO_SPI_MASTER.md))
+  - `0x500–0x57F`: Sensors / inputs (`0x500` ADC CH0–CH3, `0x501` ADC CH4 + meta, `0x502` SPI ADC control — see [TODO_SPI_MASTER.md](TODO_SPI_MASTER.md))
   - `0x600–0x607`: DC motors (`GET_INFO`, `SET_SPEED`, `GET_STATUS`, `SET_SPEED_ALL`, `BRAKE`, `COAST`, `GET_FAULTS`, `CONFIG_FREQ`)
 
 ---

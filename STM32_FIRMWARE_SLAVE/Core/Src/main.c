@@ -86,7 +86,11 @@ static volatile uint32_t adc_error_count = 0U;
 
 static uint8_t           spi_tx_buf[SPI_FRAME_SIZE];
 static uint8_t           spi_rx_buf[SPI_FRAME_SIZE];
+static uint8_t           spi_frame_shadow[2][SPI_FRAME_SIZE];
+static volatile uint8_t  spi_frame_front = 0U;
 static volatile uint8_t  spi_adc_dirty = 0U;
+static volatile uint8_t  spi_cs_active = 0U;
+static volatile uint8_t  spi_cs_restart_pending = 0U;
 static volatile uint32_t spi_tx_count = 0U;
 static volatile uint32_t spi_error_count = 0U;
 static volatile uint32_t spi_resync_count = 0U;
@@ -169,12 +173,16 @@ static void SPI1_PackFrame(uint8_t *buf)
 
 static void SPI1_RearmSlaveDMA(void)
 {
+  if ((spi_cs_active != 0U) && (hspi1.State != HAL_SPI_STATE_READY))
+  {
+    return;
+  }
   if (hspi1.State != HAL_SPI_STATE_READY)
   {
     (void)HAL_SPI_Abort(&hspi1);
   }
   __HAL_SPI_CLEAR_OVRFLAG(&hspi1);
-  SPI1_PackFrame(spi_tx_buf);
+  memcpy(spi_tx_buf, spi_frame_shadow[spi_frame_front], SPI_FRAME_SIZE);
   spi_adc_dirty = 0U;
 
   if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
@@ -411,6 +419,8 @@ int main(void)
       "\r\nITV_SLAVE_READY: ADC1 5ch(PA0-PA4) | USART1 115200 | SPI1 Slave 16B DMA+IRQ\r\n",
       50U);
 
+  SPI1_PackFrame(spi_frame_shadow[0]);
+  spi_frame_front = 0U;
   SPI1_RearmSlaveDMA();
 
   uint32_t last_sample_tick = HAL_GetTick();
@@ -446,17 +456,18 @@ int main(void)
       }
     }
 
-    if ((HAL_GPIO_ReadPin(SPI1_NSS_GPIO_Port, SPI1_NSS_Pin) == GPIO_PIN_SET) &&
-        (__HAL_SPI_GET_FLAG(&hspi1, SPI_FLAG_BSY) == RESET))
+    if (spi_cs_restart_pending != 0U)
     {
-      uint8_t partial_rx = (hspi1.hdmarx != NULL) &&
-                           (__HAL_DMA_GET_COUNTER(hspi1.hdmarx) != SPI_FRAME_SIZE);
-      if (partial_rx != 0U)
+      spi_cs_restart_pending = 0U;
+      if (spi_cs_active == 0U)
       {
-        spi_resync_count++;
+        if (hspi1.State != HAL_SPI_STATE_READY)
+        {
+          spi_resync_count++;
+        }
         SPI1_RearmSlaveDMA();
       }
-      else if ((spi_adc_dirty != 0U) || (hspi1.State == HAL_SPI_STATE_READY))
+      else if (hspi1.State == HAL_SPI_STATE_READY)
       {
         SPI1_RearmSlaveDMA();
       }
@@ -573,6 +584,10 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
     adc_valid = 1U;
     adc_sample_count++;
     adc_data_ready = 1U;
+
+    uint8_t back = (uint8_t)(spi_frame_front ^ 1U);
+    SPI1_PackFrame(spi_frame_shadow[back]);
+    spi_frame_front = back;
     spi_adc_dirty = 1U;
     adc_busy = 0U;
   }
@@ -592,7 +607,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
   if (hspi->Instance == SPI1)
   {
     spi_tx_count++;
-    SPI1_PackFrame(spi_tx_buf);
+    memcpy(spi_tx_buf, spi_frame_shadow[spi_frame_front], SPI_FRAME_SIZE);
     spi_adc_dirty = 0U;
     if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
     {
@@ -609,12 +624,37 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
     __HAL_SPI_CLEAR_OVRFLAG(hspi);
     if (hspi->State == HAL_SPI_STATE_READY)
     {
-      SPI1_PackFrame(spi_tx_buf);
+      memcpy(spi_tx_buf, spi_frame_shadow[spi_frame_front], SPI_FRAME_SIZE);
       spi_adc_dirty = 0U;
       if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
       {
         spi_error_count++;
       }
+    }
+    else
+    {
+      spi_cs_restart_pending = 1U;
+    }
+  }
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == SPI1_NSS_Pin)
+  {
+    if (HAL_GPIO_ReadPin(SPI1_NSS_GPIO_Port, SPI1_NSS_Pin) == GPIO_PIN_RESET)
+    {
+      spi_cs_active = 1U;
+      __HAL_SPI_CLEAR_OVRFLAG(&hspi1);
+      if (hspi1.State == HAL_SPI_STATE_READY)
+      {
+        SPI1_RearmSlaveDMA();
+      }
+    }
+    else
+    {
+      spi_cs_active = 0U;
+      spi_cs_restart_pending = 1U;
     }
   }
 }

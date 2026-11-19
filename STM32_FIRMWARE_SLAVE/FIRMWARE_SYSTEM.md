@@ -47,9 +47,9 @@
 | `4..13` | 10 B | `adc_raw[5]` | `uint16_t[5]` LE filtered ADC counts (`PA0`–`PA4`) |
 | `14..15` | 2 B | `crc16` | CRC-16/CCITT-FALSE (`poly=0x1021`, `init=0xFFFF`) over bytes `[0..13]` |
 
-- `SPI1_PackFrame()` snapshots `adc_latest[0..4]`, `adc_seq`, and `status` atomically and appends `crc16`.
-- `HAL_SPI_TxRxCpltCallback()` increments `spi_tx_count`, repacks `spi_tx_buf`, and re-arms `HAL_SPI_TransmitReceive_DMA()`.
-- Planned CS-edge EXTI + continuous multi-frame burst improvements are tracked in [TODO_SPI_SLAVE.md](TODO_SPI_SLAVE.md).
+- `SPI1_PackFrame()` snapshots `adc_latest[0..4]`, `adc_seq`, and `status` atomically and appends `crc16`. It runs in `HAL_ADC_ConvCpltCallback()` and publishes the frame into a two-slot shadow buffer, so the SPI ISR only copies 16 prepared bytes before re-arming.
+- `HAL_SPI_TxRxCpltCallback()` increments `spi_tx_count`, copies the front shadow frame into `spi_tx_buf`, and re-arms `HAL_SPI_TransmitReceive_DMA()`.
+- `PB6` (`SPI1_NSS`) is an EXTI rising/falling input: the falling edge tracks `spi_cs_active`, clears `OVR` and arms the slave if idle; the rising edge defers an `HAL_SPI_Abort()` + fresh re-arm to the main loop so the next assertion starts at byte 0 (`0xAA 0x55`).
 
 ---
 
