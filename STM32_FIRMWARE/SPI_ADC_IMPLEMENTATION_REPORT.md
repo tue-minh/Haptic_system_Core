@@ -53,24 +53,59 @@
 | `0x500` | `TUE_USB_CAN_SENSOR_ADC_CH0_3` | `DLC=0` (active slave) or `[logical_idx]` | `adc_raw[0..3]` as `u16` |
 | `0x501` | `TUE_USB_CAN_SENSOR_ADC_CH4_META` | `DLC=0` (active slave) or `[logical_idx]` | `adc_raw[4]` (`u16`), `seq` (`u8`), `status` (`u8`), `rx_ok_cnt` (`u16`), `crc_err_cnt` (`u16`) |
 | `0x502` | `TUE_USB_CAN_SENSOR_SPI_CTRL` | `DLC=0` query, or `[enabled, bus_id, cs_idx, period_ms]` | `[enabled, bus_id, cs_idx, period_ms, total_frames(u32)]` |
+| `0x503` | `TUE_USB_CAN_SENSOR_ADC_ALL` | `DLC=0` (active slave) or `[logical_idx]` | all five channels in one frame: 5 × 12-bit packed, then a status nibble |
 
 - `bus_id` is `1` (SPI1) or `3` (SPI3); `cs_idx` is `0..2`; `period_ms` is `1..255`.
 - Logical index = `bus_id == 1 ? cs_idx : 3 + cs_idx`.
 - Defaults at boot: enabled, `bus_id = 1`, `cs_idx = 0` (SPI1 CS1, `PB8`), `period_ms = 10`.
 - `status` bit `0` = `adc_valid`, bit `1` = slave ADC error count non-zero.
 
+### 3.1 `0x503` — all five channels in one transaction
+
+One USB binary frame is capped at 8 payload bytes (`TUE_USB_MAX_DLC = 8`), so 5 ×
+`uint16_t` (10 B) cannot fit. `0x503` packs the 12-bit ADC values instead (0..4095 fits
+exactly):
+
+| Bits | Field |
+| :--- | :--- |
+| `0..11` | `adc_raw[0]` (`PA0`) |
+| `12..23` | `adc_raw[1]` (`PA1`) |
+| `24..35` | `adc_raw[2]` (`PA2`) |
+| `36..47` | `adc_raw[3]` (`PA3`) |
+| `48..59` | `adc_raw[4]` (`PA4`) |
+| `60..63` | status nibble: bit 0 `adc_valid`, bit 1 `adc_error` |
+
+Bytes are little-endian in bit order (`payload[0]` = bits `0..7`). Use `0x501` when `seq`
+or the rx/CRC counters are needed; use `0x503` for a single-read of all five values.
+
 ## 4. Build verification
 
 `arm-none-eabi-gcc 15.2.1` + CMake/Ninja, Debug:
 
 ```text
-FLASH:  95,308 B / 512 KB (18.18%)
+FLASH:  95,564 B / 512 KB (18.23%)
 RAM:    32,632 B / 128 KB (24.90%)
 ```
 
-Both new `_Static_assert`s for `0x500`–`0x502` pass at compile time.
+Both new `_Static_assert`s for `0x500`–`0x503` pass at compile time.
 
-## 5. Bench wiring / verification
+## 5. STM32CubeMX (`.ioc`) configuration notes
+
+This change required **no peripheral reconfiguration** on the master. The following
+settings were already present in `MM_control.ioc` and must stay that way:
+
+| Item | `.ioc` / code value |
+| :--- | :--- |
+| `SPI1` | Master, 8-bit, MSB, CPOL Low / CPHA 1Edge, `NSS` software, `APB2/32` = 2.625 MHz |
+| `SPI3` | Master, 8-bit, MSB, CPOL Low / CPHA 1Edge, `NSS` software, `APB1/16` = 2.625 MHz |
+| `SPI1_CS1/2/3` | `PB8` / `PB9` / `PE0`, GPIO output, initial level HIGH |
+| `SPI3_CS1/2/3` | `PD4` / `PD3` / `PD2`, GPIO output, initial level HIGH |
+
+The polling thread (`tue_spi_adc`) is created in application code (`osThreadNew`), not by
+CubeMX, so it survives regeneration and does not appear in the `.ioc`. No NVIC or pin
+changes are required for the master.
+
+## 6. Bench wiring / verification
 
 - Connect master `PB8` (`SPI1_CS1`) to slave `PB6` (`SPI1_NSS`).
 - `SPI1_SCK` `PB3` ↔ slave `PB3`, `SPI1_MISO` `PB4` ↔ slave `PB4`,
@@ -79,7 +114,7 @@ Both new `_Static_assert`s for `0x500`–`0x502` pass at compile time.
   1. Flash both firmwares.
   2. `0x502` query (`DLC=0`) must report `enabled=1, bus_id=1, cs_idx=0, period_ms=10`.
   3. `0x500`/`0x501` should return live `PA0`–`PA4` counts and a `seq` that advances
-     at ~100 Hz.
+     at ~100 Hz; `0x503` returns all five 12-bit values in one transaction.
   4. `0x501` `rx_ok_cnt` must increase while `crc_err_cnt` stays small; use `0x502` to
      change the slot/rate if needed.
 

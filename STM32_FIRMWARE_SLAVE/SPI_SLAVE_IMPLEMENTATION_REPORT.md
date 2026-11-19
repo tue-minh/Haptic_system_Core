@@ -78,3 +78,31 @@ RAM:     3,104 B / 20 KB (15.16%)
 > Remaining work: logic-analyzer verification of a continuous multi-frame burst
 > (TODO Phase C) — confirm contiguous `AA 55`, advancing `seq`, all five channels and
 > CRC-16 across a burst, and keep the link point-to-point (`SPI_NSS_SOFT` on `PB6`).
+
+## 7. STM32CubeMX (`.ioc`) configuration to mirror
+
+Several edits landed in **CubeMX-generated** sections of `gpio.c`, `dma.c`, `adc.c` and
+`usart.c`. Regenerating from `STM32_FIRMWARE_SLAVE.ioc` will overwrite them, because the
+`.ioc` still says `PB6.Signal=GPIO_Input` and all NVIC priorities are `0`. Apply the
+following in STM32CubeMX so regenerated code matches this implementation:
+
+| Setting | Current `.ioc` | Required value |
+| :--- | :--- | :--- |
+| `PB6` signal | `GPIO_Input` | `GPIO_EXTI6` |
+| `PB6` GPIO mode | Input | **External Interrupt Mode with Rising/Falling edge trigger** |
+| `PB6` pull | Pull-up | Pull-up (unchanged) |
+| `PB6` label | `SPI1_NSS` | `SPI1_NSS` (unchanged) |
+| NVIC `EXTI line[9:5]` | not enabled | **Enabled**, preemption priority `0`, subpriority `0` |
+| NVIC `ADC1_2_IRQn` | `0` | `1` |
+| NVIC `DMA1_Channel1_IRQn` (ADC) | `0` | `1` |
+| NVIC `DMA1_Channel2_IRQn` (SPI1 RX) | `0` | `0` (unchanged) |
+| NVIC `DMA1_Channel3_IRQn` (SPI1 TX) | `0` | `0` (unchanged) |
+| NVIC `SPI1_IRQn` | `0` | `0` (unchanged) |
+| NVIC `USART1_IRQn` | `0` | `2` |
+| NVIC `DMA1_Channel4_IRQn` (USART1 TX) | `0` | `2` |
+| NVIC `DMA1_Channel5_IRQn` (USART1 RX) | `0` | `2` |
+
+Priorities are with `NVIC_PRIORITYGROUP_4` (already set in the `.ioc`), so the first number
+is the preemption priority. `EXTI9_5_IRQHandler()` itself lives in a `USER CODE` block of
+`stm32f1xx_it.c` and is preserved across regeneration; only the GPIO mode, the EXTI NVIC
+enable and the other NVIC priorities need the `.ioc` update.

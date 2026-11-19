@@ -17,12 +17,14 @@
 | Subsystem | Peripheral | Pins | Configuration | Source |
 | :--- | :--- | :--- | :--- | :--- |
 | **5-Ch ADC** | `ADC1` + `DMA1_Channel1` | `PA0` (`IN0`) – `PA4` (`IN4`) | 5-channel scan, `55.5` cycles sample time, `10 ms` (`100 Hz`) trigger | [adc.c](Core/Src/adc.c), [main.c](Core/Src/main.c) |
-| **SPI1 Slave** | `SPI1` (AFIO Remap + `NOJTAG`) | `PB3` (SCK), `PB4` (MISO), `PB5` (MOSI)<br>`PB6` (`SPI1_NSS`, Input `PULLUP`) | `SPI_MODE_SLAVE`, 8-bit MSB, Mode 0 (`CPOL=0, CPHA=1Edge`), `SPI_NSS_SOFT` | [spi.c](Core/Src/spi.c), [gpio.c](Core/Src/gpio.c) |
+| **SPI1 Slave** | `SPI1` (AFIO Remap + `NOJTAG`) | `PB3` (SCK), `PB4` (MISO), `PB5` (MOSI)<br>`PB6` (`SPI1_NSS`, EXTI rising/falling, Input `PULLUP`) | `SPI_MODE_SLAVE`, 8-bit MSB, Mode 0 (`CPOL=0, CPHA=1Edge`), `SPI_NSS_SOFT`, `EXTI9_5` priority `0` | [spi.c](Core/Src/spi.c), [gpio.c](Core/Src/gpio.c) |
 | **SPI1 DMA** | `DMA1_Channel2` (RX)<br>`DMA1_Channel3` (TX) | — | Normal mode, Byte alignment, Memory increment | [spi.c](Core/Src/spi.c) |
 | **Debug UART** | `USART1` + `DMA1_Ch4/Ch5` | `PA9` (TX), `PA10` (RX) | `115,200` baud, 8N1, IDLE-line RX DMA | [usart.c](Core/Src/usart.c), [main.c](Core/Src/main.c) |
 | **Status LED** | `GPIO_Output` | `PC13` (`led`) | Push-Pull | [gpio.c](Core/Src/gpio.c) |
 
 > **SWJ Remap**: `HAL_MspInit()` in [stm32f1xx_hal_msp.c](Core/Src/stm32f1xx_hal_msp.c) calls `__HAL_AFIO_REMAP_SWJ_NOJTAG()` so `PB3` and `PB4` are freed from JTAG for `SPI1` while keeping SWD (`PA13`/`PA14`) active.
+>
+> **CubeMX note**: `PB6` is now an EXTI rising/falling input and the NVIC priorities differ from the `.ioc` (which still has `PB6.Signal=GPIO_Input` and all priorities `0`). Mirror these settings in STM32CubeMX before regenerating; the full table is in [SPI_SLAVE_IMPLEMENTATION_REPORT.md §7](SPI_SLAVE_IMPLEMENTATION_REPORT.md#7-stm32cubemx-ioc-configuration-to-mirror).
 
 ---
 

@@ -32,8 +32,9 @@ Because each USB binary frame has `TUE_USB_MAX_DLC = 8` bytes and 5x `uint16_t` 
 | `0x500` | `TUE_USB_CAN_SENSOR_ADC_CH0_3` | Host `REQ` (`DLC=0` or `[cs_idx]`) -> MCU `RESP_OK` (`DLC=8`) | `adc_raw[0]` (`u16`), `adc_raw[1]` (`u16`), `adc_raw[2]` (`u16`), `adc_raw[3]` (`u16`) |
 | `0x501` | `TUE_USB_CAN_SENSOR_ADC_CH4_META` | Host `REQ` (`DLC=0` or `[cs_idx]`) -> MCU `RESP_OK` (`DLC=8`) | `adc_raw[4]` (`u16`), `seq` (`u8`), `status` (`u8`), `rx_ok_cnt` (`u16`), `crc_err_cnt` (`u16`) |
 | `0x502` | `TUE_USB_CAN_SENSOR_SPI_CTRL` | Host `REQ` (`DLC=4`: `enable`, `bus_id`, `cs_idx`, `period_ms`) -> MCU `RESP_OK` (`DLC=8`) | `[0]` `enabled`, `[1]` `bus_id`, `[2]` `cs_idx`, `[3]` `period_ms`, `[4..7]` `total_frames` (`u32`) |
+| `0x503` | `TUE_USB_CAN_SENSOR_ADC_ALL` | Host `REQ` (`DLC=0` or `[cs_idx]`) -> MCU `RESP_OK` (`DLC=8`) | 5 channels in one frame: `ch0..ch4` as 5 × 12-bit packed (`bits 0..59`), `bits 60..63` status nibble (bit0 `adc_valid`, bit1 `adc_error`) |
 
-> Add `TUE_USB_ASSERT_NOT_RESERVED(...)` checks for all three IDs in [tue_usb_binary.h](Core/Inc/tue_usb_binary.h).
+> Add `TUE_USB_ASSERT_NOT_RESERVED(...)` checks for all four IDs in [tue_usb_binary.h](Core/Inc/tue_usb_binary.h).
 
 ---
 
@@ -64,8 +65,13 @@ Because each USB binary frame has `TUE_USB_MAX_DLC = 8` bytes and 5x `uint16_t` 
   - `0x500` (`TUE_USB_CAN_SENSOR_ADC_CH0_3`): return `RESP_OK` with `adc_raw[0..3]` (`8` bytes).
   - `0x501` (`TUE_USB_CAN_SENSOR_ADC_CH4_META`): return `RESP_OK` with `adc_raw[4]`, `seq`, `status`, `rx_ok_cnt`, `crc_err_cnt` (`8` bytes).
   - `0x502` (`TUE_USB_CAN_SENSOR_SPI_CTRL`): configure active bus/CS/polling rate or query status.
+  - `0x503` (`TUE_USB_CAN_SENSOR_ADC_ALL`): return all 5 channels in one transaction (5 × 12-bit packed + status nibble).
   - [ ] Optional: support `TUE_USB_FRAME_ASYNC` streaming if host-initiated polling (`0x500` + `0x501`) is not fast enough.
 
 ### Phase D: Build & Hardware Verification
-- [x] Build `STM32_FIRMWARE` cleanly with zero warnings on new `0x500–0x502` static asserts.
-- [ ] Verify with `STM32_FIRMWARE_SLAVE` connected on `SPI1` (`PB3/PB4/PB5` + `PB8 -> PB6` CS) that `0x500` / `0x501` return live `PA0`–`PA4` values over USB.
+- [x] Build `STM32_FIRMWARE` cleanly with zero warnings on new `0x500–0x503` static asserts.
+- [ ] Verify with `STM32_FIRMWARE_SLAVE` connected on `SPI1` (`PB3/PB4/PB5` + `PB8 -> PB6` CS) that `0x500` / `0x501` / `0x503` return live `PA0`–`PA4` values over USB.
+
+> **CubeMX note**: no master peripheral/pin changes are required. `SPI1`/`SPI3` and all six
+> CS pins are already configured in `MM_control.ioc`; the polling task is created in
+> application code. See [SPI_ADC_IMPLEMENTATION_REPORT.md](SPI_ADC_IMPLEMENTATION_REPORT.md) §5.

@@ -500,7 +500,7 @@ static void usb_dispatch(const tue_usb_frame_t *f, const uint8_t *raw,
         /* Ping the ESP32 slave over USART2, or report the local link state. */
         err = haptic_cmd(f, out, &out_dlc);
     } else if ((f->can_id >= TUE_USB_CAN_SENSOR_ADC_CH0_3) &&
-               (f->can_id <= TUE_USB_CAN_SENSOR_SPI_CTRL)) {
+               (f->can_id <= TUE_USB_CAN_SENSOR_ADC_ALL)) {
         /* Cached ITV valve ADC feedback acquired over SPI1/SPI3. */
         err = spi_adc_cmd(f, out, &out_dlc);
     } else if (TUE_USB_CAN_ID_IS_RESERVED(f->can_id)) {
@@ -555,6 +555,25 @@ static uint8_t spi_adc_requested_index(const tue_usb_frame_t *f)
     return (f->dlc >= 1U) ? f->payload[0] : tue_spi_adc_active_index();
 }
 
+static void spi_adc_pack12(const uint16_t ch[5], uint8_t status, uint8_t *out)
+{
+    uint32_t acc = 0U;
+    uint8_t bits = 0U;
+    uint8_t idx = 0U;
+
+    for (uint32_t i = 0U; i < 5U; i++) {
+        acc |= ((uint32_t)ch[i] & 0x0FFFU) << bits;
+        bits = (uint8_t)(bits + 12U);
+        while (bits >= 8U) {
+            out[idx++] = (uint8_t)(acc & 0xFFU);
+            acc >>= 8;
+            bits = (uint8_t)(bits - 8U);
+        }
+    }
+    acc |= ((uint32_t)status & 0x0FU) << bits;
+    out[idx] = (uint8_t)(acc & 0xFFU);
+}
+
 static int spi_adc_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc)
 {
     switch (f->can_id) {
@@ -585,6 +604,18 @@ static int spi_adc_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc)
         out[3] = s.status;
         wr_u16(&out[4], s.rx_ok_cnt);
         wr_u16(&out[6], s.crc_err_cnt);
+        *out_dlc = 8U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_SENSOR_ADC_ALL: {
+        uint8_t idx = spi_adc_requested_index(f);
+        if (!tue_spi_adc_valid_index(idx)) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+        tue_spi_adc_snapshot_t s;
+        tue_spi_adc_get_snapshot(idx, &s);
+        spi_adc_pack12(s.adc_raw, s.status, out);
         *out_dlc = 8U;
         return (int)TUE_USB_ERR_OK;
     }

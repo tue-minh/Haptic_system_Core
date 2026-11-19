@@ -169,6 +169,7 @@ typedef enum {
 #define TUE_USB_CAN_SENSOR_ADC_CH0_3   0x500U
 #define TUE_USB_CAN_SENSOR_ADC_CH4_META 0x501U
 #define TUE_USB_CAN_SENSOR_SPI_CTRL    0x502U
+#define TUE_USB_CAN_SENSOR_ADC_ALL     0x503U
 
 /* --- Reserved for user custom communication (MUST NOT be used internally) - */
 #define TUE_USB_CAN_RESERVED_BASE    0x300U
@@ -260,6 +261,7 @@ TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_DC_CONFIG_FREQ);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_ADC_CH0_3);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_ADC_CH4_META);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_SPI_CTRL);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_ADC_ALL);
 
 /* Decoded frame -------------------------------------------------------------*/
 typedef struct __attribute__((packed)) {

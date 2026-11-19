@@ -48,3 +48,8 @@
 - [ ] **Test & Verify**:
   - Verify continuous multi-frame burst (e.g. `10 x 16 = 160 bytes` under a single CS LOW pulse) with logic analyzer / master firmware.
   - Confirm `SOF` (`0xAA 0x55`), incrementing `seq`, all 5 channels (`PA0`–`PA4`), and `CRC16` pass 100% of frames without byte shifts.
+
+> **CubeMX follow-up**: `gpio.c`, `dma.c`, `adc.c` and `usart.c` changes sit outside `USER CODE`
+> blocks and will be overwritten on regeneration. The `.ioc` still has `PB6.Signal=GPIO_Input`
+> and all NVIC priorities at `0`; mirror the EXTI + priority table documented in
+> [SPI_SLAVE_IMPLEMENTATION_REPORT.md §7](SPI_SLAVE_IMPLEMENTATION_REPORT.md#7-stm32cubemx-ioc-configuration-to-mirror).
