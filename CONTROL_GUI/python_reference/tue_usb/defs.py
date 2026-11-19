@@ -120,6 +120,12 @@ class CanId(IntEnum):
     SERVO_SET_ID = 0x414
     SERVO_RESET = 0x415
 
+    # --- Sensors / inputs (0x500 - 0x57F) ---
+    SENSOR_ADC_CH0_3 = 0x500
+    SENSOR_ADC_CH4_META = 0x501
+    SENSOR_SPI_CTRL = 0x502
+    SENSOR_ADC_ALL = 0x503
+
     # --- User custom range (STM32 <-> UART slave bridge) ---
     HAPTIC_TELEMETRY = 0x300
     HAPTIC_PING = 0x301

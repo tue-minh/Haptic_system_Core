@@ -124,6 +124,24 @@ class MotorSnapshot:
     haptic_ping_ok: bool = False
     haptic_ping_pending: bool = False
 
+    # STM32F103 SPI ADC feedback (CAN 0x500-0x503)
+    adc_available: bool = False
+    adc_updated: bool = False
+    adc_channels: Tuple[int, int, int, int, int] = (0, 0, 0, 0, 0)
+    adc_seq: int = 0
+    adc_status: int = 0
+    adc_valid: bool = False
+    adc_error: bool = False
+    adc_rx_ok: int = 0
+    adc_crc_err: int = 0
+    adc_hz: float = 0.0
+    adc_enabled: bool = True
+    adc_bus_id: int = 1
+    adc_cs_idx: int = 0
+    adc_period_ms: int = 10
+    adc_total_frames: int = 0
+    adc_last_error: str = ""
+
 
 class MotorWorker(threading.Thread):
     """Serialised motor/servo I/O on a dedicated thread."""
@@ -167,6 +185,11 @@ class MotorWorker(threading.Thread):
         self._consecutive_errors = 0
         self._rate_t0 = time.perf_counter()
         self._rate_cnt = 0
+
+        # SPI ADC feedback polling state
+        self._adc_available = True
+        self._adc_rate_t0 = time.perf_counter()
+        self._adc_rate_cnt = 0
 
     # -- feedback -----------------------------------------------------------
     def log(self, msg: str) -> None:
@@ -280,6 +303,30 @@ class MotorWorker(threading.Thread):
         self._update(haptic_ping_pending=True)
         self._submit("haptic_ping", token=int(token) & 0xFF)
 
+    def configure_spi_adc(self, enable: bool = True, bus_id: int = 1,
+                          cs_idx: int = 0, period_ms: int = 10) -> None:
+        """Configure the STM32 background SPI ADC poll (CAN 0x502)."""
+        self._submit("spi_adc_config", enable=bool(enable), bus_id=int(bus_id),
+                     cs_idx=int(cs_idx), period_ms=int(period_ms))
+
+    def read_spi_adc(self) -> None:
+        """Request one immediate SPI ADC feedback read (CAN 0x503 + 0x501)."""
+        self._submit("spi_adc_read")
+
+    def _publish_adc(self, fb) -> None:
+        self._update(
+            adc_available=True,
+            adc_updated=True,
+            adc_channels=tuple(int(v) for v in fb.channels),
+            adc_seq=int(fb.seq),
+            adc_status=int(fb.status),
+            adc_valid=bool(fb.adc_valid),
+            adc_error=bool(fb.adc_error),
+            adc_rx_ok=int(fb.rx_ok_cnt),
+            adc_crc_err=int(fb.crc_err_cnt),
+            adc_last_error="",
+        )
+
     # -- thread body --------------------------------------------------------
     def run(self) -> None:
         try:
@@ -375,7 +422,29 @@ class MotorWorker(threading.Thread):
             self._update(servo_online=False, servo_status_msg="Servo offline (click Scan)")
             self.log(f"servo initial probe: {exc}")
 
+        self._probe_spi_adc()
+
         return True
+
+    def _probe_spi_adc(self) -> None:
+        """Seed the panel with the current SPI ADC configuration."""
+        c = self._client
+        try:
+            ctrl = c.get_spi_adc_status()
+            self._update(
+                adc_available=True,
+                adc_enabled=bool(ctrl.enabled),
+                adc_bus_id=int(ctrl.bus_id),
+                adc_cs_idx=int(ctrl.cs_idx),
+                adc_period_ms=int(ctrl.period_ms),
+                adc_total_frames=int(ctrl.total_frames),
+            )
+            self._publish_adc(c.read_spi_adc())
+            self.log(f"SPI ADC feedback ready: {ctrl}")
+        except Exception as exc:
+            self._adc_available = False
+            self._update(adc_available=False, adc_last_error=str(exc))
+            self.log(f"SPI ADC feedback unavailable: {exc}")
 
     def _loop(self) -> None:
         poll_period = 1.0 / self.poll_hz if self.poll_hz > 0 else 0.0
@@ -549,6 +618,33 @@ class MotorWorker(threading.Thread):
                 self._update(haptic_ping=str(info), haptic_ping_ok=True,
                              haptic_ping_pending=False)
                 self.log(f"ESP32 ping ok: {info}")
+            elif action == "spi_adc_config":
+                try:
+                    ctrl = c.configure_spi_adc(kw["enable"], kw["bus_id"],
+                                               kw["cs_idx"], kw["period_ms"])
+                except Exception as exc:
+                    self._adc_available = False
+                    self._update(adc_available=False, adc_last_error=str(exc))
+                    self.log(f"SPI ADC config failed: {exc}")
+                    return
+                self._adc_available = True
+                self._update(
+                    adc_available=True,
+                    adc_enabled=bool(ctrl.enabled),
+                    adc_bus_id=int(ctrl.bus_id),
+                    adc_cs_idx=int(ctrl.cs_idx),
+                    adc_period_ms=int(ctrl.period_ms),
+                    adc_total_frames=int(ctrl.total_frames),
+                    adc_last_error="",
+                )
+                self.log(f"SPI ADC config: {ctrl}")
+            elif action == "spi_adc_read":
+                try:
+                    self._publish_adc(c.read_spi_adc())
+                except Exception as exc:
+                    self._update(adc_last_error=str(exc))
+                    self.log(f"SPI ADC read failed: {exc}")
+                    return
             self._note_success()
         except Exception as exc:
             self._note_error(exc, action)
@@ -582,7 +678,26 @@ class MotorWorker(threading.Thread):
             self._note_error(exc, "poll")
             return
 
-        # 2. Servo feedback only if servo is online
+        # 2. SPI ADC feedback from the STM32F103 slave (CAN 0x503 + 0x501)
+        if self._adc_available:
+            try:
+                fb = c.read_spi_adc()
+                self._publish_adc(fb)
+                self._adc_rate_cnt += 1
+                adc_now = time.perf_counter()
+                if adc_now - self._adc_rate_t0 >= 1.0:
+                    self._update(adc_hz=self._adc_rate_cnt / (adc_now - self._adc_rate_t0))
+                    self._adc_rate_t0, self._adc_rate_cnt = adc_now, 0
+            except Exception as exc:
+                code = getattr(getattr(exc, "code", None), "name", "")
+                if code in ("ERR_UNKNOWN_CAN_ID", "ERR_NOT_SUPPORTED"):
+                    self._adc_available = False
+                    self._update(adc_available=False, adc_last_error=str(exc))
+                    self.log("SPI ADC feedback not supported by this firmware")
+                else:
+                    self._update(adc_last_error=str(exc))
+
+        # 3. Servo feedback only if servo is online
         if self._servo_online:
             try:
                 fb = c.servo_get_feedback(self._servo_id)

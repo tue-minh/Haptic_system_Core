@@ -118,6 +118,20 @@ changes are required for the master.
   4. `0x501` `rx_ok_cnt` must increase while `crc_err_cnt` stays small; use `0x502` to
      change the slot/rate if needed.
 
+## 7. Host support (`tue_usb` + CONTROL_GUI)
+
+- `STM32_FIRMWARE/python/tue_usb/` and `CONTROL_GUI/python_reference/tue_usb/` now expose:
+  - `CanId.SENSOR_ADC_CH0_3/CH4_META/SPI_CTRL/ADC_ALL`
+  - `TueUsbClient.read_spi_adc()` (0x503 channels + 0x501 sequence/counters)
+  - `TueUsbClient.configure_spi_adc()` / `get_spi_adc_status()`
+  - `SpiAdcFeedback` / `SpiAdcCtrlStatus` and their encoders/decoders
+  - Mock-engine support so the GUI runs without hardware
+- `CONTROL_GUI`:
+  - `unified_gui/panels/adc.py` shows CH0–CH4 raw counts, mV, level bars, `seq`,
+    status flags, rx/CRC counters and rate; bus/CS/period are editable (CAN 0x502).
+  - `MotorWorker` probes the ADC at connect, polls it with the motor telemetry and
+    publishes it in `MotorSnapshot`; the panel is in the left column.
+  - Example: `STM32_FIRMWARE/python/examples/read_spi_adc.py`.
+
 > Remaining work: physical bench validation (TODO Phase D) and the optional ASYNC
-> streaming path. The host Python library update is intentionally **not** part of this
-> change — `python/TODO_SPI_ADC_LIBRARY.md` explicitly defers it.
+> streaming path.

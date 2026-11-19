@@ -234,6 +234,55 @@ class HapticUartDiag:
 
 
 # ==============================================================================
+# SPI ADC Feedback Data Models (0x500 - 0x503)
+# ==============================================================================
+
+@dataclass
+class SpiAdcFeedback:
+    """Combined feedback from the STM32F103 ITV valve ADC slave."""
+    channels: Tuple[int, int, int, int, int]
+    seq: int
+    status: int
+    rx_ok_cnt: int
+    crc_err_cnt: int
+
+    @property
+    def adc_valid(self) -> bool:
+        return bool(self.status & 0x01)
+
+    @property
+    def adc_error(self) -> bool:
+        return bool(self.status & 0x02)
+
+    def millivolts(self, vref_mv: int = 3300) -> Tuple[float, ...]:
+        """Convert each 12-bit count to millivolts."""
+        return tuple(float(ch) * float(vref_mv) / 4095.0 for ch in self.channels)
+
+    def __str__(self) -> str:
+        ch = ", ".join(str(v) for v in self.channels)
+        return (
+            f"SpiAdc[{ch}] seq={self.seq} status=0x{self.status:02X} "
+            f"ok={self.rx_ok_cnt} crc_err={self.crc_err_cnt}"
+        )
+
+
+@dataclass
+class SpiAdcCtrlStatus:
+    """SPI ADC polling configuration reported by CAN 0x502."""
+    enabled: bool
+    bus_id: int
+    cs_idx: int
+    period_ms: int
+    total_frames: int
+
+    def __str__(self) -> str:
+        return (
+            f"SpiAdcCtrl(enabled={int(self.enabled)}, bus=SPI{self.bus_id}, "
+            f"cs={self.cs_idx}, period={self.period_ms}ms, frames={self.total_frames})"
+        )
+
+
+# ==============================================================================
 # Encoders (Host -> Payload Bytes)
 # ==============================================================================
 
@@ -386,6 +435,24 @@ class Encoders:
     def haptic_ping(token: int = 0) -> bytes:
         """8-byte ping request: token in byte 0, remaining bytes zero."""
         return struct.pack("<B7x", token & 0xFF)
+
+
+    @staticmethod
+    def sensor_adc_req(cs_idx: Optional[int] = None) -> bytes:
+        """Request payload for 0x500/0x501/0x503 (empty = active slave)."""
+        return b"" if cs_idx is None else struct.pack("<B", int(cs_idx) & 0xFF)
+
+    @staticmethod
+    def sensor_spi_ctrl(enable: bool = True, bus_id: int = 1, cs_idx: int = 0,
+                        period_ms: int = 10) -> bytes:
+        """Configure SPI ADC polling (CAN 0x502)."""
+        return struct.pack(
+            "<BBBB",
+            1 if enable else 0,
+            int(bus_id) & 0xFF,
+            int(cs_idx) & 0xFF,
+            int(period_ms) & 0xFF,
+        )
 
 
 # ==============================================================================
@@ -654,4 +721,40 @@ class Decoders:
             tx_fail=tx_fail,
             timeouts=timeouts,
             replies=replies,
+        )
+
+    # --- SPI ADC feedback (0x500 - 0x503) ---
+    @staticmethod
+    def sensor_adc_ch0_3(payload: bytes) -> Tuple[int, int, int, int]:
+        if len(payload) < 8:
+            raise ValueError("SENSOR_ADC_CH0_3 payload must be 8 bytes")
+        return struct.unpack("<4H", payload[:8])
+
+    @staticmethod
+    def sensor_adc_ch4_meta(payload: bytes) -> Tuple[int, int, int, int, int]:
+        if len(payload) < 8:
+            raise ValueError("SENSOR_ADC_CH4_META payload must be 8 bytes")
+        return struct.unpack("<HBBHH", payload[:8])
+
+    @staticmethod
+    def sensor_adc_all(payload: bytes) -> Tuple[Tuple[int, int, int, int, int], int]:
+        """Unpack 0x503: five 12-bit channels then a status nibble."""
+        if len(payload) < 8:
+            raise ValueError("SENSOR_ADC_ALL payload must be 8 bytes")
+        raw = int.from_bytes(payload[:8], "little")
+        channels = tuple((raw >> (12 * i)) & 0xFFF for i in range(5))
+        status = (raw >> 60) & 0x0F
+        return channels, status
+
+    @staticmethod
+    def sensor_spi_ctrl(payload: bytes) -> SpiAdcCtrlStatus:
+        if len(payload) < 8:
+            raise ValueError("SENSOR_SPI_CTRL payload must be 8 bytes")
+        enabled, bus_id, cs_idx, period_ms, total = struct.unpack("<BBBBI", payload[:8])
+        return SpiAdcCtrlStatus(
+            enabled=bool(enabled),
+            bus_id=bus_id,
+            cs_idx=cs_idx,
+            period_ms=period_ms,
+            total_frames=total,
         )

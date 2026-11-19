@@ -39,6 +39,7 @@ from .plot3d import Tactile3DView
 from .taxelmap import TaxelMapView
 from .valvemap import ValveMapView
 from .panels.connection import ConnectionPanel, ROLE_LABELS, ROLES
+from .panels.adc import AdcPanel
 from .panels.haptic import HapticPanel
 from .panels.motor import GripperPanel, StepperPanel
 from .panels.recording import RecordingPanel
@@ -111,13 +112,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.haptic_panel = HapticPanel()
         self.haptic_panel.enabled_changed.connect(self._on_haptic_toggled)
         self.haptic_panel.ping_requested.connect(self._on_ping_esp32)
+        self.adc_panel = AdcPanel()
+        self.adc_panel.apply_requested.connect(self._on_adc_apply)
+        self.adc_panel.read_requested.connect(self._on_adc_read)
         self.record_panel = RecordingPanel(DEFAULT_OUTPUT_DIR)
         self.record_panel.start_requested.connect(self._start_recording)
         self.record_panel.stop_requested.connect(self._stop_recording)
         self.record_panel.output_dir_changed.connect(self.recorder.set_output_dir)
 
         for widget in (self.connection, self.stepper, self.gripper,
-                       self.haptic_panel, self.record_panel):
+                       self.haptic_panel, self.adc_panel, self.record_panel):
             left.addWidget(widget)
         left.addStretch(1)
 
@@ -273,6 +277,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stepper.bind(None)
         self.gripper.bind(None)
         self.connection.set_state("motor", "off", "-")
+        self.adc_panel.clear()
         self.post_log("STM32 link (motor + haptic) disconnected")
 
     def _disconnect_sensor(self, tag: str) -> None:
@@ -346,6 +351,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._drain_log()
 
         snap = self.motor.snapshot() if self.motor is not None else None
+        if snap is not None:
+            self.adc_panel.update_telemetry(snap)
+        else:
+            self.adc_panel.clear()
 
         if self._tick % 3 == 0:
             self._update_connection_states(snap)
@@ -423,6 +432,21 @@ class MainWindow(QtWidgets.QMainWindow):
                 "ESP32 ping: STM32 link is not connected", False)
             return
         motor.ping_haptic()
+
+    def _on_adc_apply(self, enable: bool, bus_id: int, cs_idx: int,
+                      period_ms: int) -> None:
+        motor = self.motor
+        if motor is None:
+            self.post_log("SPI ADC: STM32 link is not connected")
+            return
+        motor.configure_spi_adc(enable, bus_id, cs_idx, period_ms)
+        self.post_log(
+            f"SPI ADC: request bus=SPI{bus_id} cs={cs_idx} "
+            f"period={period_ms} ms enable={int(enable)}")
+
+    def _on_adc_read(self) -> None:
+        if self.motor is not None:
+            self.motor.read_spi_adc()
 
     def _stop_haptic(self, reason: str) -> None:
         streamer, self.haptic = self.haptic, None

@@ -130,6 +130,12 @@ class CanId(IntEnum):
     DC_GET_FAULTS = 0x606
     DC_CONFIG_FREQ = 0x607
 
+    # --- Sensors / inputs (0x500 - 0x57F) ---
+    SENSOR_ADC_CH0_3 = 0x500
+    SENSOR_ADC_CH4_META = 0x501
+    SENSOR_SPI_CTRL = 0x502
+    SENSOR_ADC_ALL = 0x503
+
     # --- User custom range (host streams, firmware forwards to UART slave) ---
     HAPTIC_TELEMETRY = 0x300
     HAPTIC_PING = 0x301

@@ -8,6 +8,7 @@ Mock Engine for hardware-free simulation and testing.
 
 import sys
 import time
+import math
 import struct
 import threading
 from typing import Callable, List, Optional, Tuple, Union
@@ -41,6 +42,8 @@ from .payloads import (
     ServoFeedback,
     ServoFeedbackDynamics,
     ServoFeedbackHealth,
+    SpiAdcCtrlStatus,
+    SpiAdcFeedback,
     StepperConfig,
     StepperStatus,
     SysInfo,
@@ -101,6 +104,17 @@ class TueUsbClient:
         self._mock_dc_speed = {1: 0, 2: 0, 3: 0, 4: 0}
         self._mock_dc_mode = {1: 0, 2: 0, 3: 0, 4: 0}
         self._mock_dc_freq_hz = 20000
+
+        # SPI ADC feedback mock state
+        self._mock_adc_seq = 0
+        self._mock_adc_rx_ok = 0
+        self._mock_adc_crc_err = 0
+        self._mock_adc_status = 0x01
+        self._mock_adc_enabled = 1
+        self._mock_adc_bus = 1
+        self._mock_adc_cs = 0
+        self._mock_adc_period = 10
+        self._mock_adc_total = 0
 
     def __enter__(self) -> "TueUsbClient":
         self.connect()
@@ -435,6 +449,40 @@ class TueUsbClient:
             self._mock_dc_freq_hz = freq_khz * 1000
             return [Frame(FrameType.RESP_OK, can_id, struct.pack("<I", self._mock_dc_freq_hz), seq)]
 
+        # 5. SPI ADC feedback (0x500 - 0x503)
+        elif can_id in (CanId.SENSOR_ADC_CH0_3, CanId.SENSOR_ADC_CH4_META,
+                        CanId.SENSOR_ADC_ALL):
+            t = time.time()
+            ch = [max(0, min(4095, int(2048 + 1800 * math.sin(t * 0.8 + i * 0.9))))
+                  for i in range(5)]
+            self._mock_adc_seq = (self._mock_adc_seq + 1) & 0xFF
+            self._mock_adc_rx_ok = (self._mock_adc_rx_ok + 1) & 0xFFFF
+            self._mock_adc_total += 1
+            status = self._mock_adc_status
+            if can_id == CanId.SENSOR_ADC_CH0_3:
+                payload = struct.pack("<4H", *ch[:4])
+            elif can_id == CanId.SENSOR_ADC_CH4_META:
+                payload = struct.pack("<HBBHH", ch[4], self._mock_adc_seq, status,
+                                      self._mock_adc_rx_ok, self._mock_adc_crc_err)
+            else:
+                packed = 0
+                for i, value in enumerate(ch):
+                    packed |= (value & 0xFFF) << (12 * i)
+                packed |= (status & 0x0F) << 60
+                payload = packed.to_bytes(8, "little")
+            return [Frame(FrameType.RESP_OK, can_id, payload, seq)]
+
+        elif can_id == CanId.SENSOR_SPI_CTRL:
+            if len(p) >= 4:
+                self._mock_adc_enabled = p[0]
+                self._mock_adc_bus = p[1]
+                self._mock_adc_cs = p[2]
+                self._mock_adc_period = p[3]
+            payload = struct.pack("<BBBBI", self._mock_adc_enabled, self._mock_adc_bus,
+                                  self._mock_adc_cs, self._mock_adc_period,
+                                  self._mock_adc_total)
+            return [Frame(FrameType.RESP_OK, can_id, payload, seq)]
+
         return [Frame(FrameType.RESP_ERR, can_id, bytes([ErrorCode.ERR_UNKNOWN_CAN_ID]), seq)]
 
     # ==========================================================================
@@ -636,6 +684,49 @@ class TueUsbClient:
         """Read STM32-side USART2 link diagnostics (CAN 0x302)."""
         resp = self.transact(CanId.HAPTIC_DIAG)
         return Decoders.haptic_uart_diag(resp.payload)
+
+    # ==========================================================================
+    # SPI ADC feedback (0x500 - 0x503)
+    # ==========================================================================
+
+    def read_spi_adc(self, cs_idx: Optional[int] = None,
+                     timeout: Optional[float] = None) -> SpiAdcFeedback:
+        """Read all five ITV valve ADC channels from the STM32F103 slave.
+
+        Uses CAN 0x503 for one-shot 12-bit channel data and CAN 0x501 for the
+        frame sequence and link counters.
+        """
+        req = Encoders.sensor_adc_req(cs_idx)
+        resp_all = self.transact(CanId.SENSOR_ADC_ALL, req, timeout=timeout)
+        channels, status = Decoders.sensor_adc_all(resp_all.payload)
+
+        resp_meta = self.transact(CanId.SENSOR_ADC_CH4_META, req, timeout=timeout)
+        _ch4, seq, _meta_status, rx_ok, crc_err = Decoders.sensor_adc_ch4_meta(
+            resp_meta.payload)
+
+        return SpiAdcFeedback(
+            channels=channels,
+            seq=seq,
+            status=status,
+            rx_ok_cnt=rx_ok,
+            crc_err_cnt=crc_err,
+        )
+
+    def configure_spi_adc(self, enable: bool = True, bus_id: int = 1,
+                          cs_idx: int = 0, period_ms: int = 10,
+                          timeout: Optional[float] = None) -> SpiAdcCtrlStatus:
+        """Configure the master's background SPI ADC polling (CAN 0x502)."""
+        resp = self.transact(
+            CanId.SENSOR_SPI_CTRL,
+            Encoders.sensor_spi_ctrl(enable, bus_id, cs_idx, period_ms),
+            timeout=timeout,
+        )
+        return Decoders.sensor_spi_ctrl(resp.payload)
+
+    def get_spi_adc_status(self, timeout: Optional[float] = None) -> SpiAdcCtrlStatus:
+        """Query the current SPI ADC polling configuration (CAN 0x502)."""
+        resp = self.transact(CanId.SENSOR_SPI_CTRL, b"", timeout=timeout)
+        return Decoders.sensor_spi_ctrl(resp.payload)
 
     # ==========================================================================
     # High-Level Stepper Motion API (0x200 - 0x281)
