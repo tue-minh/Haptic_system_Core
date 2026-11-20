@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ControlGui.Core.TueUsb;
@@ -464,6 +465,190 @@ namespace ControlGui.Tests
             StringAssert.Contains(report, "Peak Normal Force (Fz): 5.00 N");
             StringAssert.Contains(report, "Peak Normal Force (Fz): 4.80 N");
             StringAssert.Contains(report, "EXCELLENT / SYMMETRIC");
+        }
+
+        [TestMethod]
+        public void TestLogSpacedFrequenciesAndSteppedSchedule()
+        {
+            double[] asc = BandwidthExperimentRunner.BuildLogSpacedFrequencies(0.1, 10.0, 25, descending: false);
+            Assert.AreEqual(25, asc.Length);
+            Assert.AreEqual(0.1, asc[0], 1e-4);
+            Assert.AreEqual(10.0, asc[^1], 1e-4);
+            for (int i = 1; i < asc.Length; i++)
+                Assert.IsTrue(asc[i] > asc[i - 1], "Ascending log frequencies must strictly increase");
+
+            double[] desc = BandwidthExperimentRunner.BuildLogSpacedFrequencies(0.1, 10.0, 25, descending: true);
+            Assert.AreEqual(10.0, desc[0], 1e-4);
+            Assert.AreEqual(0.1, desc[^1], 1e-4);
+
+            var cfg = new BandwidthExperimentConfig
+            {
+                SweepMode = BandwidthSweepMode.SteppedSine,
+                TimingMode = SteppedTimingMode.TotalDurationSec,
+                TotalDurationSec = 90.0,
+                FrequenciesHz = asc,
+                CyclesPerFreq = 10,
+                SettleCycles = 2
+            };
+            var sched = BandwidthExperimentRunner.BuildSteppedSchedule(cfg);
+            Assert.AreEqual(25, sched.Count);
+            double total = 0;
+            foreach (var item in sched) total += item.SettleSec + item.MeasureSec;
+            Assert.AreEqual(90.0, total, 0.25);
+            Assert.AreEqual(90.0, BandwidthExperimentRunner.EstimateDurationSec(cfg), 0.25);
+        }
+
+        [TestMethod]
+        public void TestChirpPhaseAndDemodulationBodeRecovery()
+        {
+            // Simulate a 1st-order low-pass plant with fc = 3.0 Hz excited by a 45 s log-chirp (0.1 -> 10 Hz)
+            double f0 = 0.1, f1 = 10.0, dur = 45.0, fs = 100.0;
+            double fcTrue = 3.0;
+            double wc = 2.0 * Math.PI * fcTrue;
+            double u0 = 50.0, ua = 25.0;
+
+            int n = (int)(dur * fs);
+            var t = new double[n];
+            var u = new double[n];
+            var y = new double[n];
+
+            double dt = 1.0 / fs;
+            double yState = u0 * 20.0;
+            int subSteps = 10;
+            double dtSub = dt / subSteps;
+
+            for (int i = 0; i < n; i++)
+            {
+                double ti = i * dt;
+                t[i] = ti;
+                double phi = BandwidthExperimentRunner.ChirpPhaseRad(ti, f0, f1, dur);
+                u[i] = u0 + ua * Math.Sin(phi);
+                y[i] = yState;
+
+                for (int s = 0; s < subSteps; s++)
+                {
+                    double ts = ti + (s + 0.5) * dtSub;
+                    double uSub = u0 + ua * Math.Sin(BandwidthExperimentRunner.ChirpPhaseRad(ts, f0, f1, dur));
+                    yState += wc * (uSub * 20.0 - yState) * dtSub;
+                }
+            }
+
+            double[] bins = BandwidthExperimentRunner.BuildLogSpacedFrequencies(f0, f1, 25, descending: false);
+            var pts = new List<BodePoint>();
+            for (int b = 0; b < bins.Length; b++)
+            {
+                var pt = BandwidthExperimentRunner.EvaluateChirpBin(t, u, y, f0, f1, dur, ua, bins[b], b);
+                if (pt != null) pts.Add(pt);
+            }
+
+            Assert.AreEqual(25, pts.Count);
+            double aRef = pts[0].AmpMv;
+            for (int i = 0; i < pts.Count; i++)
+                pts[i] = pts[i] with { MagDb = 20.0 * Math.Log10(pts[i].AmpMv / aRef) };
+
+            double? fcMeas = BandwidthExperimentRunner.ComputeBandwidthFcHz(pts);
+            Assert.IsTrue(fcMeas.HasValue, "Should detect -3 dB cutoff frequency");
+            Assert.AreEqual(fcTrue, fcMeas!.Value, 0.25, $"Expected fc near {fcTrue} Hz, got {fcMeas.Value:F2} Hz");
+        }
+
+        [TestMethod]
+        public void TestBandwidthExperimentMockSteppedAndChirp()
+        {
+            string testDir = Path.Combine(Path.GetTempPath(), "ControlGuiTests_Bw_" + Guid.NewGuid());
+            Directory.CreateDirectory(testDir);
+
+            try
+            {
+                using var worker = new MotorWorker("MOCK_PORT", mock: true, pollHz: 30.0);
+                worker.Start();
+                Thread.Sleep(120);
+                Assert.IsTrue(worker.Snapshot().Connected);
+
+                // 1. Short Stepped-Sine run in TotalDurationSec mode
+                string dbStepped = Path.Combine(testDir, "stepped.db");
+                var cfgStepped = new BandwidthExperimentConfig
+                {
+                    ChannelIndex = 0,
+                    SweepMode = BandwidthSweepMode.SteppedSine,
+                    TimingMode = SteppedTimingMode.TotalDurationSec,
+                    TotalDurationSec = 5.0,
+                    FreqMinHz = 2.0,
+                    FreqMaxHz = 8.0,
+                    FreqPoints = 4,
+                    FrequenciesHz = BandwidthExperimentRunner.BuildLogSpacedFrequencies(2.0, 8.0, 4, false),
+                    SampleRateHz = 50.0,
+                    DbPath = dbStepped
+                };
+                using (var runner = new BandwidthExperimentRunner(worker, cfgStepped))
+                {
+                    runner.Start();
+                    var deadline = DateTime.UtcNow.AddSeconds(12);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        var st = runner.GetStatus();
+                        if (!st.Running && st.State is "completed" or "error") break;
+                        Thread.Sleep(50);
+                    }
+                    Assert.AreEqual("completed", runner.GetStatus().State);
+                    Assert.AreEqual(4, runner.GetBodePoints().Count);
+
+                    // Verify u_pct is phase-continuous across step transitions (no vertical jumps)
+                    var samples = runner.GetLiveSamples(2000);
+                    Assert.IsTrue(samples.Count > 20);
+                    double maxAllowedJump = 25.0 * 2.0 * Math.PI * 8.0 * 0.05 + 1.0; // generous dt jitter bound, far below 25..50% step jump
+                    for (int i = 1; i < samples.Count; i++)
+                    {
+                        if (samples[i].StepIdx != samples[i - 1].StepIdx)
+                        {
+                            double jump = Math.Abs(samples[i].UPct - samples[i - 1].UPct);
+                            Assert.IsTrue(jump <= maxAllowedJump,
+                                $"Phase jump at step transition {samples[i - 1].StepIdx}->{samples[i].StepIdx}: {jump:F2}%");
+                        }
+                    }
+                }
+
+                // 2. Short Continuous Log-Chirp run
+                string dbChirp = Path.Combine(testDir, "chirp.db");
+                var cfgChirp = new BandwidthExperimentConfig
+                {
+                    ChannelIndex = 0,
+                    SweepMode = BandwidthSweepMode.Chirp,
+                    TotalDurationSec = 5.0,
+                    ChirpSettleSec = 0.5,
+                    FreqMinHz = 1.0,
+                    FreqMaxHz = 8.0,
+                    FreqPoints = 10,
+                    SampleRateHz = 50.0,
+                    DbPath = dbChirp
+                };
+                using (var runner = new BandwidthExperimentRunner(worker, cfgChirp))
+                {
+                    runner.Start();
+                    var deadline = DateTime.UtcNow.AddSeconds(12);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        var st = runner.GetStatus();
+                        if (!st.Running && st.State is "completed" or "error") break;
+                        Thread.Sleep(50);
+                    }
+                    Assert.AreEqual("completed", runner.GetStatus().State);
+                    Assert.IsTrue(runner.GetBodePoints().Count >= 8, "Chirp should produce Bode summary points");
+                    double? mockFc = runner.GetStatus().BandwidthFcHz;
+                    string summary = string.Join(", ", runner.GetBodePoints().OrderBy(p => p.FreqHz).Select(p => $"{p.FreqHz:F2}:{p.AmpMv:F1}/{p.MagDb:F2}"));
+                    Assert.IsTrue(mockFc.HasValue && mockFc.Value > 3.5 && mockFc.Value < 5.8,
+                        $"Expected simulated plant fc near 4.5 Hz, got {mockFc?.ToString("F2") ?? "null"} | pts=[{summary}]");
+                }
+
+                Assert.IsTrue(File.Exists(dbStepped));
+                Assert.IsTrue(File.Exists(dbChirp));
+            }
+            finally
+            {
+                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                try { Directory.Delete(testDir, true); } catch { }
+            }
         }
     }
 }

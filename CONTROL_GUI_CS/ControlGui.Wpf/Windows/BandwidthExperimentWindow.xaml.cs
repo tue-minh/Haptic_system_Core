@@ -24,6 +24,8 @@ namespace ControlGui.Wpf.Windows
         private BandwidthExperimentRunner? _runner;
         private MotorWorker? _ownMotor;
         private int _activeMeasureCh = 0;
+        private bool _uiReady = false;
+        private bool _updatingFreqs = false;
 
         public BandwidthExperimentWindow(Func<MotorWorker?> getMotor, Action<string>? log = null)
         {
@@ -36,6 +38,8 @@ namespace ControlGui.Wpf.Windows
                 $"bandwidth_{DateTime.Now:yyyyMMdd_HHmmss}.db");
 
             RefreshComPorts();
+            _uiReady = true;
+            SyncUiModeAndPreview();
 
             _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
             _uiTimer.Tick += OnUiTick;
@@ -139,6 +143,17 @@ namespace ControlGui.Wpf.Windows
                 return;
             }
 
+            // If the current DB path already exists from an earlier run, create a fresh timestamped file
+            if (File.Exists(System.IO.Path.GetFullPath(cfg.DbPath)))
+            {
+                string modeTag = cfg.SweepMode == BandwidthSweepMode.Chirp ? "chirp" : "stepped";
+                string fresh = System.IO.Path.Combine(
+                    System.IO.Path.GetDirectoryName(cfg.DbPath) ?? "recordings",
+                    $"bandwidth_{modeTag}_{DateTime.Now:yyyyMMdd_HHmmss}.db");
+                TxtDbPath.Text = fresh;
+                cfg = cfg with { DbPath = fresh };
+            }
+
             _runner?.Dispose();
             _activeMeasureCh = cfg.ChannelIndex >= 0 && cfg.ChannelIndex < 5 ? cfg.ChannelIndex : 0;
 
@@ -155,12 +170,89 @@ namespace ControlGui.Wpf.Windows
             BtnStop.IsEnabled = false;
         }
 
+        private void OnParamChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!_uiReady) return;
+            SyncUiModeAndPreview();
+        }
+
+        private void OnParamTextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (!_uiReady || _updatingFreqs) return;
+            SyncUiModeAndPreview();
+        }
+
+        private static string GetSelectedTag(ComboBox cbo, string fallback)
+        {
+            return (cbo.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? fallback;
+        }
+
+        private void SyncUiModeAndPreview()
+        {
+            bool isChirp = GetSelectedTag(CboSweepMode, "stepped") == "chirp";
+            bool isLogFreq = isChirp || GetSelectedTag(CboFreqMode, "log") == "log";
+            bool isTotalTime = isChirp || GetSelectedTag(CboTimingMode, "total") == "total";
+
+            CboFreqMode.IsEnabled = !isChirp;
+            PanelLogFreq.IsEnabled = isLogFreq;
+            TxtFreqs.IsReadOnly = isLogFreq;
+            CboTimingMode.IsEnabled = !isChirp;
+            TxtTotalSec.IsEnabled = isTotalTime;
+            TxtChirpSettle.IsEnabled = isChirp;
+            TxtCycles.IsEnabled = !isChirp;
+            TxtSettle.IsEnabled = !isChirp;
+
+            if (isLogFreq &&
+                double.TryParse(TxtFMin.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double fMin) &&
+                double.TryParse(TxtFMax.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double fMax) &&
+                int.TryParse(TxtFPoints.Text, out int nPts) &&
+                fMin > 0 && fMax > fMin && nPts >= 2)
+            {
+                bool desc = GetSelectedTag(CboFreqOrder, "asc") == "desc";
+                var arr = BandwidthExperimentRunner.BuildLogSpacedFrequencies(fMin, fMax, nPts, desc);
+                _updatingFreqs = true;
+                TxtFreqs.Text = string.Join(", ", arr.Select(f => f.ToString("G3", CultureInfo.InvariantCulture)));
+                _updatingFreqs = false;
+            }
+
+            if (TryParseConfig(out var cfg, out string err))
+            {
+                double estSec = BandwidthExperimentRunner.EstimateDurationSec(cfg);
+                if (cfg.SweepMode == BandwidthSweepMode.Chirp)
+                {
+                    double f0 = cfg.FreqDescending ? cfg.FreqMaxHz : cfg.FreqMinHz;
+                    double f1 = cfg.FreqDescending ? cfg.FreqMinHz : cfg.FreqMaxHz;
+                    TxtSchedulePreview.Text =
+                        $"Est: {estSec:F1} s continuous log-chirp ({f0:G3}→{f1:G3} Hz, {cfg.FreqPoints} Bode bins, {cfg.ChirpSettleSec:F1} s settle)";
+                }
+                else
+                {
+                    var sched = BandwidthExperimentRunner.BuildSteppedSchedule(cfg);
+                    double minStep = sched.Min(s => s.SettleSec + s.MeasureSec);
+                    double maxStep = sched.Max(s => s.SettleSec + s.MeasureSec);
+                    TxtSchedulePreview.Text =
+                        $"Est: {estSec:F1} s stepped-sine ({sched.Count} pts, step {minStep:F2}–{maxStep:F2} s)";
+                }
+                TxtSchedulePreview.Foreground = new SolidColorBrush(Color.FromRgb(21, 101, 192));
+            }
+            else
+            {
+                TxtSchedulePreview.Text = $"Invalid config: {err}";
+                TxtSchedulePreview.Foreground = Brushes.Crimson;
+            }
+        }
+
         private bool TryParseConfig(out BandwidthExperimentConfig cfg, out string error)
         {
             cfg = new BandwidthExperimentConfig();
             error = "";
 
             int chIdx = Convert.ToInt32(((ComboBoxItem)CboChannel.SelectedItem).Tag);
+            bool isChirp = GetSelectedTag(CboSweepMode, "stepped") == "chirp";
+            bool isLogFreq = isChirp || GetSelectedTag(CboFreqMode, "log") == "log";
+            bool isTotalTime = isChirp || GetSelectedTag(CboTimingMode, "total") == "total";
+            bool desc = GetSelectedTag(CboFreqOrder, "asc") == "desc";
+
             if (!double.TryParse(TxtU0.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double u0) || u0 < 0 || u0 > 100)
             {
                 error = "Bias u0 must be 0..100%.";
@@ -171,14 +263,54 @@ namespace ControlGui.Wpf.Windows
                 error = "Amplitude ua must be > 0 and <= 50%.";
                 return false;
             }
-            var freqs = TxtFreqs.Text
-                .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(s => double.TryParse(s.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : -1)
-                .Where(v => v > 0)
-                .ToArray();
-            if (freqs.Length == 0)
+
+            double fMin = 0.1, fMax = 10.0;
+            int fPoints = 25;
+            double[] freqs;
+            if (isLogFreq)
             {
-                error = "Provide at least one positive frequency in Hz.";
+                if (!double.TryParse(TxtFMin.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out fMin) || fMin < 0.02)
+                {
+                    error = "f_min must be >= 0.02 Hz.";
+                    return false;
+                }
+                if (!double.TryParse(TxtFMax.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out fMax) || fMax <= fMin)
+                {
+                    error = "f_max must be > f_min.";
+                    return false;
+                }
+                if (!int.TryParse(TxtFPoints.Text, out fPoints) || fPoints < 2 || fPoints > 200)
+                {
+                    error = "Points must be 2..200.";
+                    return false;
+                }
+                freqs = BandwidthExperimentRunner.BuildLogSpacedFrequencies(fMin, fMax, fPoints, desc);
+            }
+            else
+            {
+                freqs = TxtFreqs.Text
+                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => double.TryParse(s.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : -1)
+                    .Where(v => v > 0)
+                    .ToArray();
+                if (freqs.Length == 0)
+                {
+                    error = "Provide at least one positive frequency in Hz.";
+                    return false;
+                }
+                fMin = freqs.Min();
+                fMax = freqs.Max();
+                fPoints = freqs.Length;
+            }
+
+            if (!double.TryParse(TxtTotalSec.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double totalSec) || totalSec < 5)
+            {
+                error = "Total Duration must be >= 5 s.";
+                return false;
+            }
+            if (!double.TryParse(TxtChirpSettle.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double chirpSettle) || chirpSettle < 0)
+            {
+                error = "Chirp Settle must be >= 0 s.";
                 return false;
             }
             if (!int.TryParse(TxtCycles.Text, out int cycles) || cycles < 1)
@@ -220,6 +352,14 @@ namespace ControlGui.Wpf.Windows
             cfg = new BandwidthExperimentConfig
             {
                 ChannelIndex = chIdx,
+                SweepMode = isChirp ? BandwidthSweepMode.Chirp : BandwidthSweepMode.SteppedSine,
+                TimingMode = isTotalTime ? SteppedTimingMode.TotalDurationSec : SteppedTimingMode.FixedCycles,
+                TotalDurationSec = totalSec,
+                FreqMinHz = fMin,
+                FreqMaxHz = fMax,
+                FreqPoints = fPoints,
+                FreqDescending = desc,
+                ChirpSettleSec = chirpSettle,
                 U0Percent = u0,
                 UaPercent = ua,
                 FrequenciesHz = freqs,
@@ -399,20 +539,36 @@ namespace ControlGui.Wpf.Windows
 
             if (points.Count == 0) return;
 
+            // Log-spaced canonical grid ticks
+            double[] tickFreqs = { 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0 };
+            foreach (double tf in tickFreqs)
+            {
+                double ltf = Math.Log10(tf);
+                if (ltf < fMinLog || ltf > fMaxLog) continue;
+                double gx = padL + (ltf - fMinLog) / (fMaxLog - fMinLog) * pw;
+                CanvasBode.Children.Add(new Line
+                {
+                    X1 = gx, Y1 = padT, X2 = gx, Y2 = padT + ph,
+                    Stroke = new SolidColorBrush(Color.FromRgb(238, 238, 238)),
+                    StrokeThickness = 1
+                });
+                AddLabel(CanvasBode, $"{tf:G3}", gx - 8, padT + ph + 2, Brushes.DimGray);
+            }
+
             var sorted = points.OrderBy(p => p.FreqHz).ToList();
             var line = new Polyline { Stroke = Brushes.Teal, StrokeThickness = 2.0 };
+            double dotSize = sorted.Count > 16 ? 5.0 : 7.0;
+            double dotHalf = dotSize * 0.5;
             foreach (var p in sorted)
             {
                 double x = padL + (Math.Log10(p.FreqHz) - fMinLog) / (fMaxLog - fMinLog) * pw;
                 double y = padT + (1.0 - Math.Clamp((p.MagDb - dbMin) / (dbMax - dbMin), 0.0, 1.0)) * ph;
                 line.Points.Add(new Point(x, y));
 
-                var dot = new Ellipse { Width = 7, Height = 7, Fill = Brushes.Teal };
-                Canvas.SetLeft(dot, x - 3.5);
-                Canvas.SetTop(dot, y - 3.5);
+                var dot = new Ellipse { Width = dotSize, Height = dotSize, Fill = Brushes.Teal };
+                Canvas.SetLeft(dot, x - dotHalf);
+                Canvas.SetTop(dot, y - dotHalf);
                 CanvasBode.Children.Add(dot);
-
-                AddLabel(CanvasBode, $"{p.FreqHz:G3}", x - 10, padT + ph + 2, Brushes.DimGray);
             }
             CanvasBode.Children.Add(line);
 

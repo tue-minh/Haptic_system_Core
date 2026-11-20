@@ -12,12 +12,39 @@ using Microsoft.Data.Sqlite;
 
 namespace ControlGui.Core.Haptic
 {
+    public enum BandwidthSweepMode
+    {
+        SteppedSine = 0,
+        Chirp = 1
+    }
+
+    public enum SteppedTimingMode
+    {
+        FixedCycles = 0,
+        TotalDurationSec = 1
+    }
+
+    public record SteppedScheduleItem(
+        int StepIdx,
+        double FreqHz,
+        double SettleSec,
+        double MeasureSec
+    );
+
     public record BandwidthExperimentConfig
     {
         public int ChannelIndex { get; init; } = 0; // 0..4 (A..E), or -1 for all 5
+        public BandwidthSweepMode SweepMode { get; init; } = BandwidthSweepMode.SteppedSine;
+        public SteppedTimingMode TimingMode { get; init; } = SteppedTimingMode.TotalDurationSec;
+        public double TotalDurationSec { get; init; } = 90.0;
+        public double FreqMinHz { get; init; } = 0.1;
+        public double FreqMaxHz { get; init; } = 10.0;
+        public int FreqPoints { get; init; } = 25;
+        public bool FreqDescending { get; init; } = false;
+        public double ChirpSettleSec { get; init; } = 1.0;
         public double U0Percent { get; init; } = 50.0;
         public double UaPercent { get; init; } = 25.0;
-        public double[] FrequenciesHz { get; init; } = { 10.0, 7.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.5, 0.2, 0.1 };
+        public double[] FrequenciesHz { get; init; } = BandwidthExperimentRunner.BuildLogSpacedFrequencies(0.1, 10.0, 25, false);
         public int CyclesPerFreq { get; init; } = 10;
         public int SettleCycles { get; init; } = 2;
         public double SampleRateHz { get; init; } = 100.0;
@@ -88,6 +115,7 @@ namespace ControlGui.Core.Haptic
 
         private Thread? _runThread;
         private Thread? _dbThread;
+        private volatile bool _bodeDirty = false;
         private BandwidthExperimentStatus _status;
 
         public BandwidthExperimentRunner(
@@ -104,12 +132,16 @@ namespace ControlGui.Core.Haptic
                 : _cfg.DbPath;
             _cfg = _cfg with { DbPath = Path.GetFullPath(dbPath) };
 
+            int initSteps = _cfg.SweepMode == BandwidthSweepMode.Chirp
+                ? Math.Clamp(_cfg.FreqPoints, 10, 120)
+                : _cfg.FrequenciesHz.Length;
+
             _status = new BandwidthExperimentStatus(
                 Running: false,
                 State: "idle",
                 Error: "",
                 CurrentStep: 0,
-                TotalSteps: _cfg.FrequenciesHz.Length,
+                TotalSteps: initSteps,
                 CurrentFreqHz: 0,
                 Progress01: 0,
                 SampleCount: 0,
@@ -197,143 +229,17 @@ namespace ControlGui.Core.Haptic
                 double dt = 1.0 / sampleRate;
                 int activeCh = _cfg.ChannelIndex;
                 int measureCh = activeCh >= 0 && activeCh < 5 ? activeCh : 0;
-                double[] freqs = _cfg.FrequenciesHz;
-                int totalSteps = freqs.Length;
 
-                // Estimate total duration for progress bar
-                double totalExpectedSec = freqs.Sum(f => (_cfg.CyclesPerFreq + _cfg.SettleCycles) / Math.Max(0.05, f));
-
-                var globalSw = Stopwatch.StartNew();
-                long totalSamples = 0;
-                long readErrors = 0;
-                var rateSw = Stopwatch.StartNew();
-                long rateSamples = 0;
-                double actualHz = 0.0;
-
-                SetStatus(s => s with { Running = true, State = "running", Error = "", TotalSteps = totalSteps });
-                _log($"[bandwidth] Started sweep ({totalSteps} steps, fs={sampleRate:F1} Hz) -> {_cfg.DbPath}");
-
-                for (int stepIdx = 0; stepIdx < totalSteps && !_cts.IsCancellationRequested; stepIdx++)
+                var state = new LoopCounters
                 {
-                    double f = Math.Max(0.02, freqs[stepIdx]);
-                    int totalCycles = Math.Max(1, _cfg.CyclesPerFreq + _cfg.SettleCycles);
-                    double stepDur = totalCycles / f;
-                    double settleDur = _cfg.SettleCycles / f;
+                    GlobalSw = Stopwatch.StartNew(),
+                    RateSw = Stopwatch.StartNew()
+                };
 
-                    var stepTRel = new List<double>((int)(stepDur * sampleRate) + 16);
-                    var stepY = new List<double>((int)(stepDur * sampleRate) + 16);
-
-                    var stepSw = Stopwatch.StartNew();
-                    double nextTick = 0.0;
-
-                    while (stepSw.Elapsed.TotalSeconds < stepDur && !_cts.IsCancellationRequested)
-                    {
-                        double tStep = stepSw.Elapsed.TotalSeconds;
-                        double tGlobal = globalSw.Elapsed.TotalSeconds;
-                        bool isSettling = tStep < settleDur;
-
-                        double uPct = Math.Clamp(_cfg.U0Percent + _cfg.UaPercent * Math.Sin(2.0 * Math.PI * f * tStep), 0.0, 100.0);
-                        byte uByte = (byte)Math.Clamp((int)Math.Round(uPct * 255.0 / 100.0), 0, 255);
-
-                        // 1. Send 0x300 command frame to ESP32 via STM32 master
-                        byte[] payload = new byte[8];
-                        for (int c = 0; c < 5; c++)
-                        {
-                            if (activeCh < 0 || activeCh == c)
-                                payload[c] = uByte;
-                            else
-                                payload[c] = _cfg.ZeroInactiveChannels
-                                    ? (byte)0
-                                    : (byte)Math.Clamp((int)Math.Round(_cfg.U0Percent * 255.0 / 100.0), 0, 255);
-                        }
-                        payload[5] = 0; // force_lsb reserved
-                        payload[6] = 0; // flags
-                        payload[7] = 0; // checksum / reserved
-                        _motor.WriteFrame(_encoder.Encode(payload));
-
-                        // 2. Read 5-channel ADC back over SPI (0x503)
-                        ushort[] raw = new ushort[5];
-                        double[] mv = new double[5];
-                        bool readOk = false;
-                        try
-                        {
-                            var res = _motor.ReadSpiAdcChannelsDirect(_cfg.SpiCsIdx, 0.04);
-                            if (res.HasValue)
-                            {
-                                raw = res.Value.Channels;
-                                for (int c = 0; c < 5; c++)
-                                    mv[c] = raw[c] * _cfg.VrefMv / 4095.0;
-                                readOk = true;
-                            }
-                            else
-                            {
-                                readErrors++;
-                            }
-                        }
-                        catch
-                        {
-                            readErrors++;
-                        }
-
-                        if (readOk)
-                        {
-                            var sample = new BandwidthSample(tGlobal, f, stepIdx, isSettling, uPct, uByte, raw, mv);
-                            _dbQueue.Add(sample);
-                            lock (_lock)
-                            {
-                                if (_liveRing.Count >= LiveCapacity)
-                                    _liveRing.RemoveAt(0);
-                                _liveRing.Add(sample);
-                            }
-
-                            if (!isSettling)
-                            {
-                                stepTRel.Add(tStep);
-                                stepY.Add(mv[measureCh]);
-                            }
-                        }
-
-                        totalSamples++;
-                        rateSamples++;
-                        if (rateSw.ElapsedMilliseconds >= 500)
-                        {
-                            actualHz = rateSamples / (rateSw.ElapsedMilliseconds / 1000.0);
-                            rateSamples = 0;
-                            rateSw.Restart();
-                        }
-
-                        double progress = Math.Clamp(globalSw.Elapsed.TotalSeconds / Math.Max(0.1, totalExpectedSec), 0.0, 1.0);
-                        SetStatus(s => s with
-                        {
-                            CurrentStep = stepIdx + 1,
-                            CurrentFreqHz = f,
-                            Progress01 = progress,
-                            SampleCount = totalSamples,
-                            ReadErrors = readErrors,
-                            ActualRateHz = actualHz
-                        });
-
-                        // Precise hybrid sleep/spin for next sample period
-                        nextTick += dt;
-                        double remaining = nextTick - stepSw.Elapsed.TotalSeconds;
-                        if (remaining > 0.002)
-                            Thread.Sleep((int)((remaining - 0.001) * 1000.0));
-                        while (stepSw.Elapsed.TotalSeconds < nextTick && !_cts.IsCancellationRequested)
-                            Thread.SpinWait(20);
-                    }
-
-                    // Fit sinusoid at frequency f on the settled portion
-                    if (stepTRel.Count >= 6)
-                    {
-                        var (dc, amp, phaseDeg) = FitSinusoid(stepTRel.ToArray(), stepY.ToArray(), f);
-                        lock (_lock)
-                        {
-                            _bodePoints.Add(new BodePoint(stepIdx, f, stepTRel.Count, amp, phaseDeg, 0.0, dc));
-                            RecomputeBodeMagnitudesLocked();
-                        }
-                        UpdateBodeSummaryInDb();
-                    }
-                }
+                if (_cfg.SweepMode == BandwidthSweepMode.Chirp)
+                    RunChirpLoop(sampleRate, dt, activeCh, measureCh, state);
+                else
+                    RunSteppedSineLoop(sampleRate, dt, activeCh, measureCh, state);
 
                 // Return valves safely to 0% when finished
                 byte[] zeroPayload = new byte[8];
@@ -353,7 +259,7 @@ namespace ControlGui.Core.Haptic
                     Progress01 = _cts.IsCancellationRequested ? s.Progress01 : 1.0,
                     BandwidthFcHz = fc
                 });
-                _log($"[bandwidth] {finalState}: {totalSamples} samples, {readErrors} read errors, fc={(fc.HasValue ? $"{fc.Value:F2} Hz" : "N/A")}");
+                _log($"[bandwidth] {finalState}: {state.TotalSamples} samples, {state.ReadErrors} read errors, fc={(fc.HasValue ? $"{fc.Value:F2} Hz" : "N/A")}");
             }
             catch (Exception ex)
             {
@@ -365,8 +271,513 @@ namespace ControlGui.Core.Haptic
                 if (pollingPaused)
                     _motor.SetPollingPaused(false);
                 _dbQueue.CompleteAdding();
+                _dbThread?.Join(2000);
                 TimeEndPeriod(1);
             }
+        }
+
+        private sealed class LoopCounters
+        {
+            public required Stopwatch GlobalSw { get; init; }
+            public required Stopwatch RateSw { get; init; }
+            public long TotalSamples;
+            public long ReadErrors;
+            public long RateSamples;
+            public double ActualHz;
+        }
+
+        private void RunSteppedSineLoop(double sampleRate, double dt, int activeCh, int measureCh, LoopCounters st)
+        {
+            var schedule = BuildSteppedSchedule(_cfg);
+            int totalSteps = schedule.Count;
+            double totalExpectedSec = Math.Max(0.1, schedule.Sum(s => s.SettleSec + s.MeasureSec));
+
+            SetStatus(s => s with { Running = true, State = "running", Error = "", TotalSteps = totalSteps });
+            _log($"[bandwidth] Started Stepped-Sine ({totalSteps} steps, est {totalExpectedSec:F1} s, fs={sampleRate:F1} Hz) -> {_cfg.DbPath}");
+
+            // Carry phase continuously across frequency transitions so u(t) never jumps discontinuously
+            double phaseRad = 0.0;
+            double nextTickGlobal = st.GlobalSw.Elapsed.TotalSeconds;
+
+            foreach (var item in schedule)
+            {
+                if (_cts.IsCancellationRequested) break;
+
+                double f = item.FreqHz;
+                double stepDur = item.SettleSec + item.MeasureSec;
+                var stepTRel = new List<double>((int)(stepDur * sampleRate) + 16);
+                var stepY = new List<double>((int)(stepDur * sampleRate) + 16);
+
+                double stepStartGlobal = st.GlobalSw.Elapsed.TotalSeconds;
+                if (nextTickGlobal < stepStartGlobal) nextTickGlobal = stepStartGlobal;
+                double stepPhaseOffset = phaseRad;
+
+                while (st.GlobalSw.Elapsed.TotalSeconds - stepStartGlobal < stepDur && !_cts.IsCancellationRequested)
+                {
+                    double tGlobal = st.GlobalSw.Elapsed.TotalSeconds;
+                    double tStep = tGlobal - stepStartGlobal;
+                    bool isSettling = tStep < item.SettleSec;
+                    double phi = stepPhaseOffset + 2.0 * Math.PI * f * tStep;
+                    double uPct = Math.Clamp(_cfg.U0Percent + _cfg.UaPercent * Math.Sin(phi), 0.0, 100.0);
+
+                    var sample = SendAndSample(activeCh, uPct, tGlobal, f, item.StepIdx, isSettling, st);
+                    if (sample != null && !isSettling)
+                    {
+                        stepTRel.Add(tStep);
+                        stepY.Add(sample.Mv[measureCh]);
+                    }
+
+                    UpdateLoopStatus(item.StepIdx + 1, f, tGlobal / totalExpectedSec, st);
+                    nextTickGlobal += dt;
+                    WaitForNextTick(st.GlobalSw, nextTickGlobal);
+                }
+
+                double stepEndGlobal = st.GlobalSw.Elapsed.TotalSeconds;
+                phaseRad = (stepPhaseOffset + 2.0 * Math.PI * f * (stepEndGlobal - stepStartGlobal)) % (2.0 * Math.PI);
+                if (phaseRad < 0.0) phaseRad += 2.0 * Math.PI;
+
+                if (stepTRel.Count >= 6)
+                {
+                    var (dc, amp, phaseDeg) = FitSinusoid(stepTRel.ToArray(), stepY.ToArray(), f, stepPhaseOffset);
+                    lock (_lock)
+                    {
+                        _bodePoints.Add(new BodePoint(item.StepIdx, f, stepTRel.Count, amp, phaseDeg, 0.0, dc));
+                        RecomputeBodeMagnitudesLocked();
+                    }
+                    UpdateBodeSummaryInDb();
+                }
+            }
+        }
+
+        private void RunChirpLoop(double sampleRate, double dt, int activeCh, int measureCh, LoopCounters st)
+        {
+            double fMin = Math.Max(0.02, Math.Min(_cfg.FreqMinHz, _cfg.FreqMaxHz));
+            double fMax = Math.Max(fMin * 1.05, Math.Max(_cfg.FreqMinHz, _cfg.FreqMaxHz));
+            double f0 = _cfg.FreqDescending ? fMax : fMin;
+            double f1 = _cfg.FreqDescending ? fMin : fMax;
+
+            double totalDur = Math.Max(5.0, _cfg.TotalDurationSec);
+            double preSettleSec = Math.Clamp(_cfg.ChirpSettleSec, 0.0, totalDur * 0.25);
+            double chirpDur = Math.Max(2.0, totalDur - preSettleSec);
+
+            int nBins = Math.Clamp(_cfg.FreqPoints, 10, 120);
+            double[] evalFreqs = BuildLogSpacedFrequencies(fMin, fMax, nBins, descending: _cfg.FreqDescending);
+            bool[] binDone = new bool[nBins];
+
+            SetStatus(s => s with { Running = true, State = "running", Error = "", TotalSteps = nBins });
+            _log($"[bandwidth] Started Log-Chirp ({f0:G3}->{f1:G3} Hz, T={totalDur:F1} s, settle={preSettleSec:F1} s, {nBins} eval bins, fs={sampleRate:F1} Hz) -> {_cfg.DbPath}");
+
+            int estCap = (int)(chirpDur * sampleRate) + 64;
+            var chirpT = new List<double>(estCap);
+            var chirpU = new List<double>(estCap);
+            var chirpY = new List<double>(estCap);
+
+            var sweepSw = Stopwatch.StartNew();
+            double nextTick = 0.0;
+            int completedBins = 0;
+
+            while (sweepSw.Elapsed.TotalSeconds < totalDur && !_cts.IsCancellationRequested)
+            {
+                double tElapsed = sweepSw.Elapsed.TotalSeconds;
+                double tGlobal = st.GlobalSw.Elapsed.TotalSeconds;
+                bool isSettling = tElapsed < preSettleSec;
+                double tChirp = Math.Max(0.0, tElapsed - preSettleSec);
+
+                double fInst = isSettling ? f0 : ChirpInstantFreq(tChirp, f0, f1, chirpDur);
+                double phi = isSettling ? 0.0 : ChirpPhaseRad(tChirp, f0, f1, chirpDur);
+                double uPct = Math.Clamp(_cfg.U0Percent + _cfg.UaPercent * Math.Sin(phi), 0.0, 100.0);
+
+                var sample = SendAndSample(activeCh, uPct, tGlobal, fInst, 0, isSettling, st);
+                if (sample != null && !isSettling)
+                {
+                    chirpT.Add(tChirp);
+                    chirpU.Add(uPct);
+                    chirpY.Add(sample.Mv[measureCh]);
+
+                    // Incrementally demodulate bins whose right window tail has passed
+                    bool addedAny = false;
+                    for (int b = 0; b < nBins; b++)
+                    {
+                        if (binDone[b]) continue;
+                        double fc = evalFreqs[b];
+                        double tc = ChirpTimeAtFreq(fc, f0, f1, chirpDur);
+                        double halfW = ChirpHalfWindowSec(fc, chirpDur);
+                        if (tChirp >= tc + halfW)
+                        {
+                            binDone[b] = true;
+                            completedBins++;
+                            var pt = EvaluateChirpBin(
+                                chirpT, chirpU, chirpY, f0, f1, chirpDur, _cfg.UaPercent, fc, b);
+                            if (pt != null)
+                            {
+                                lock (_lock)
+                                {
+                                    _bodePoints.Add(pt);
+                                    RecomputeBodeMagnitudesLocked();
+                                }
+                                addedAny = true;
+                            }
+                        }
+                    }
+                    if (addedAny) UpdateBodeSummaryInDb();
+                }
+
+                UpdateLoopStatus(Math.Max(1, completedBins), fInst, tElapsed / totalDur, st);
+                nextTick += dt;
+                WaitForNextTick(sweepSw, nextTick);
+            }
+
+            // Finalize remaining tail bins
+            if (chirpT.Count >= 12)
+            {
+                bool addedAny = false;
+                double tMaxMeasured = chirpT[^1];
+                for (int b = 0; b < nBins; b++)
+                {
+                    if (binDone[b]) continue;
+                    double fc = evalFreqs[b];
+                    double tc = ChirpTimeAtFreq(fc, f0, f1, chirpDur);
+                    if (_cts.IsCancellationRequested && tc > tMaxMeasured) continue;
+                    binDone[b] = true;
+                    var pt = EvaluateChirpBin(
+                        chirpT, chirpU, chirpY, f0, f1, chirpDur, _cfg.UaPercent, fc, b);
+                    if (pt != null)
+                    {
+                        lock (_lock)
+                        {
+                            _bodePoints.Add(pt);
+                            RecomputeBodeMagnitudesLocked();
+                        }
+                        addedAny = true;
+                    }
+                }
+                if (addedAny) UpdateBodeSummaryInDb();
+            }
+        }
+
+        private BandwidthSample? SendAndSample(
+            int activeCh,
+            double uPct,
+            double tGlobal,
+            double freqHz,
+            int stepIdx,
+            bool isSettling,
+            LoopCounters st)
+        {
+            byte uByte = (byte)Math.Clamp((int)Math.Round(uPct * 255.0 / 100.0), 0, 255);
+
+            byte[] payload = new byte[8];
+            byte inactiveByte = _cfg.ZeroInactiveChannels
+                ? (byte)0
+                : (byte)Math.Clamp((int)Math.Round(_cfg.U0Percent * 255.0 / 100.0), 0, 255);
+            for (int c = 0; c < 5; c++)
+                payload[c] = (activeCh < 0 || activeCh == c) ? uByte : inactiveByte;
+
+            _motor.WriteFrame(_encoder.Encode(payload));
+
+            ushort[] raw = new ushort[5];
+            double[] mv = new double[5];
+            bool readOk = false;
+            try
+            {
+                var res = _motor.ReadSpiAdcChannelsDirect(_cfg.SpiCsIdx, 0.04);
+                if (res.HasValue)
+                {
+                    raw = res.Value.Channels;
+                    for (int c = 0; c < 5; c++)
+                        mv[c] = raw[c] * _cfg.VrefMv / 4095.0;
+                    readOk = true;
+                }
+                else
+                {
+                    st.ReadErrors++;
+                }
+            }
+            catch
+            {
+                st.ReadErrors++;
+            }
+
+            BandwidthSample? sample = null;
+            if (readOk)
+            {
+                sample = new BandwidthSample(tGlobal, freqHz, stepIdx, isSettling, uPct, uByte, raw, mv);
+                _dbQueue.Add(sample);
+                lock (_lock)
+                {
+                    if (_liveRing.Count >= LiveCapacity)
+                        _liveRing.RemoveAt(0);
+                    _liveRing.Add(sample);
+                }
+            }
+
+            st.TotalSamples++;
+            st.RateSamples++;
+            if (st.RateSw.ElapsedMilliseconds >= 500)
+            {
+                st.ActualHz = st.RateSamples / (st.RateSw.ElapsedMilliseconds / 1000.0);
+                st.RateSamples = 0;
+                st.RateSw.Restart();
+            }
+
+            return sample;
+        }
+
+        private void UpdateLoopStatus(int currentStep, double currentFreqHz, double progress01, LoopCounters st)
+        {
+            SetStatus(s => s with
+            {
+                CurrentStep = currentStep,
+                CurrentFreqHz = currentFreqHz,
+                Progress01 = Math.Clamp(progress01, 0.0, 1.0),
+                SampleCount = st.TotalSamples,
+                ReadErrors = st.ReadErrors,
+                ActualRateHz = st.ActualHz
+            });
+        }
+
+        private void WaitForNextTick(Stopwatch sw, double nextTickSec)
+        {
+            double remaining = nextTickSec - sw.Elapsed.TotalSeconds;
+            if (remaining > 0.002)
+                Thread.Sleep((int)((remaining - 0.001) * 1000.0));
+            while (sw.Elapsed.TotalSeconds < nextTickSec && !_cts.IsCancellationRequested)
+                Thread.SpinWait(20);
+        }
+
+        /// <summary>
+        /// Generates logarithmically spaced frequencies between fMin and fMax.
+        /// </summary>
+        public static double[] BuildLogSpacedFrequencies(double fMin, double fMax, int count, bool descending = false)
+        {
+            fMin = Math.Max(0.02, fMin);
+            fMax = Math.Max(fMin, fMax);
+            count = Math.Clamp(count, 2, 200);
+            var arr = new double[count];
+            double logMin = Math.Log10(fMin);
+            double logMax = Math.Log10(fMax);
+            for (int i = 0; i < count; i++)
+            {
+                double frac = (double)i / (count - 1);
+                double f = Math.Pow(10.0, logMin + frac * (logMax - logMin));
+                arr[i] = Math.Round(f, 4);
+            }
+            if (descending) Array.Reverse(arr);
+            return arr;
+        }
+
+        /// <summary>
+        /// Builds the stepped-sine schedule according to FixedCycles or TotalDurationSec mode.
+        /// </summary>
+        public static List<SteppedScheduleItem> BuildSteppedSchedule(BandwidthExperimentConfig cfg)
+        {
+            double[] freqs = cfg.FrequenciesHz != null && cfg.FrequenciesHz.Length > 0
+                ? cfg.FrequenciesHz
+                : BuildLogSpacedFrequencies(cfg.FreqMinHz, cfg.FreqMaxHz, cfg.FreqPoints, cfg.FreqDescending);
+
+            int n = freqs.Length;
+            var result = new List<SteppedScheduleItem>(n);
+
+            if (cfg.TimingMode == SteppedTimingMode.FixedCycles || cfg.TotalDurationSec <= 0)
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    double f = Math.Max(0.02, freqs[i]);
+                    double settle = Math.Max(0, cfg.SettleCycles) / f;
+                    double meas = Math.Max(1, cfg.CyclesPerFreq) / f;
+                    result.Add(new SteppedScheduleItem(i, f, settle, meas));
+                }
+                return result;
+            }
+
+            double target = Math.Max(5.0, cfg.TotalDurationSec);
+            double[] minSettle = new double[n];
+            double[] minMeas = new double[n];
+            double[] fullSettle = new double[n];
+            double[] fullMeas = new double[n];
+
+            for (int i = 0; i < n; i++)
+            {
+                double f = Math.Max(0.02, freqs[i]);
+                minSettle[i] = cfg.SettleCycles <= 0 ? 0.0 : Math.Clamp(1.0 / f, 0.25, 1.5);
+                minMeas[i] = Math.Max(1.0 / f, 0.8);
+                fullSettle[i] = cfg.SettleCycles <= 0 ? 0.0 : Math.Max(minSettle[i], cfg.SettleCycles / f);
+                fullMeas[i] = Math.Max(minMeas[i], Math.Max(1, cfg.CyclesPerFreq) / f);
+            }
+
+            double sumMin = 0, sumFull = 0;
+            for (int i = 0; i < n; i++)
+            {
+                sumMin += minSettle[i] + minMeas[i];
+                sumFull += fullSettle[i] + fullMeas[i];
+            }
+
+            if (target >= sumFull)
+            {
+                double scale = target / Math.Max(1e-6, sumFull);
+                for (int i = 0; i < n; i++)
+                    result.Add(new SteppedScheduleItem(i, Math.Max(0.02, freqs[i]), fullSettle[i] * scale, fullMeas[i] * scale));
+            }
+            else if (target >= sumMin)
+            {
+                double alpha = (target - sumMin) / Math.Max(1e-6, sumFull - sumMin);
+                for (int i = 0; i < n; i++)
+                {
+                    double s = minSettle[i] + alpha * (fullSettle[i] - minSettle[i]);
+                    double m = minMeas[i] + alpha * (fullMeas[i] - minMeas[i]);
+                    result.Add(new SteppedScheduleItem(i, Math.Max(0.02, freqs[i]), s, m));
+                }
+            }
+            else
+            {
+                // Tight budget: trim settle first, then scale measurement proportionally
+                double sumMinMeas = minMeas.Sum();
+                double sumMinSettle = minSettle.Sum();
+                double availSettle = Math.Max(0.0, target - sumMinMeas);
+                if (sumMinSettle > 1e-6 && availSettle >= 0.25 * sumMinSettle)
+                {
+                    double sScale = availSettle / sumMinSettle;
+                    for (int i = 0; i < n; i++)
+                        result.Add(new SteppedScheduleItem(i, Math.Max(0.02, freqs[i]), minSettle[i] * sScale, minMeas[i]));
+                }
+                else
+                {
+                    double totalScale = target / Math.Max(1e-6, sumMin);
+                    for (int i = 0; i < n; i++)
+                        result.Add(new SteppedScheduleItem(i, Math.Max(0.02, freqs[i]), minSettle[i] * totalScale, minMeas[i] * totalScale));
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Estimates total experiment runtime in seconds for the given config.
+        /// </summary>
+        public static double EstimateDurationSec(BandwidthExperimentConfig cfg)
+        {
+            if (cfg.SweepMode == BandwidthSweepMode.Chirp)
+                return Math.Max(5.0, cfg.TotalDurationSec);
+            return BuildSteppedSchedule(cfg).Sum(s => s.SettleSec + s.MeasureSec);
+        }
+
+        public static double ChirpInstantFreq(double tChirp, double f0, double f1, double chirpDur)
+        {
+            double frac = Math.Clamp(tChirp / Math.Max(1e-6, chirpDur), 0.0, 1.0);
+            return f0 * Math.Pow(f1 / f0, frac);
+        }
+
+        public static double ChirpPhaseRad(double tChirp, double f0, double f1, double chirpDur)
+        {
+            if (Math.Abs(f1 - f0) <= 1e-6 * Math.Max(f0, f1))
+                return 2.0 * Math.PI * f0 * tChirp;
+            double lnRatio = Math.Log(f1 / f0);
+            return (2.0 * Math.PI * f0 * chirpDur / lnRatio) * (Math.Exp(lnRatio * (tChirp / chirpDur)) - 1.0);
+        }
+
+        private static double ChirpTimeAtFreq(double freq, double f0, double f1, double chirpDur)
+        {
+            if (Math.Abs(f1 - f0) <= 1e-6 * Math.Max(f0, f1))
+                return 0.5 * chirpDur;
+            double frac = Math.Log(freq / f0) / Math.Log(f1 / f0);
+            return Math.Clamp(frac, 0.0, 1.0) * chirpDur;
+        }
+
+        private static double ChirpHalfWindowSec(double evalFreq, double chirpDur)
+        {
+            return Math.Clamp(1.75 / Math.Max(0.02, evalFreq), 0.6, Math.Max(1.5, chirpDur * 0.22));
+        }
+
+        /// <summary>
+        /// Demodulates one frequency bin from a continuous log-chirp recording using Hann-weighted
+        /// local least squares against exact instantaneous chirp phase.
+        /// </summary>
+        public static BodePoint? EvaluateChirpBin(
+            IReadOnlyList<double> tChirp,
+            IReadOnlyList<double> uPct,
+            IReadOnlyList<double> yMv,
+            double f0,
+            double f1,
+            double chirpDur,
+            double uaPct,
+            double evalFreq,
+            int stepIdx)
+        {
+            double tc = ChirpTimeAtFreq(evalFreq, f0, f1, chirpDur);
+            double halfW = ChirpHalfWindowSec(evalFreq, chirpDur);
+            double tSkip = Math.Min(0.35, 0.02 * chirpDur);
+
+            var idxList = new List<int>(256);
+            for (int i = 0; i < tChirp.Count; i++)
+            {
+                double t = tChirp[i];
+                if (t >= tc - halfW && t <= tc + halfW && (t >= tSkip || tc < 0.25))
+                    idxList.Add(i);
+            }
+            if (idxList.Count < 8)
+            {
+                idxList.Clear();
+                for (int i = 0; i < tChirp.Count; i++)
+                {
+                    double t = tChirp[i];
+                    if (t >= tc - halfW && t <= tc + halfW)
+                        idxList.Add(i);
+                }
+            }
+            if (idxList.Count < 6) return null;
+
+            double tMean = 0.0;
+            foreach (int i in idxList) tMean += tChirp[i];
+            tMean /= idxList.Count;
+
+            double[,] Au = new double[4, 5];
+            double[,] Ay = new double[4, 5];
+            double[] r = new double[4];
+
+            foreach (int i in idxList)
+            {
+                double t = tChirp[i];
+                double phi = ChirpPhaseRad(t, f0, f1, chirpDur);
+                double w = 0.5 * (1.0 + Math.Cos(Math.PI * Math.Clamp((t - tc) / halfW, -1.0, 1.0)));
+                w = Math.Max(w, 1e-3);
+
+                r[0] = 1.0;
+                r[1] = t - tMean;
+                r[2] = Math.Cos(phi);
+                r[3] = Math.Sin(phi);
+
+                double ui = uPct[i];
+                double yi = yMv[i];
+
+                for (int row = 0; row < 4; row++)
+                {
+                    double wr = w * r[row];
+                    for (int col = 0; col < 4; col++)
+                    {
+                        double val = wr * r[col];
+                        Au[row, col] += val;
+                        Ay[row, col] += val;
+                    }
+                    Au[row, 4] += wr * ui;
+                    Ay[row, 4] += wr * yi;
+                }
+            }
+
+            if (!SolveLinearSystem(Au, 4, out double[] bu) || !SolveLinearSystem(Ay, 4, out double[] by))
+                return null;
+
+            double ampU = Math.Sqrt(bu[2] * bu[2] + bu[3] * bu[3]);
+            double ampY = Math.Sqrt(by[2] * by[2] + by[3] * by[3]);
+            if (ampU < 1e-4) return null;
+
+            double ampScaled = ampY * (uaPct / ampU);
+            double phaseU = Math.Atan2(bu[2], bu[3]);
+            double phaseY = Math.Atan2(by[2], by[3]);
+            double phaseDeg = (phaseY - phaseU) * (180.0 / Math.PI);
+            while (phaseDeg > 180.0) phaseDeg -= 360.0;
+            while (phaseDeg <= -180.0) phaseDeg += 360.0;
+
+            return new BodePoint(stepIdx, evalFreq, idxList.Count, ampScaled, phaseDeg, 0.0, by[0]);
         }
 
         private void RecomputeBodeMagnitudesLocked()
@@ -388,18 +799,19 @@ namespace ControlGui.Core.Haptic
         }
 
         public static (double DcOffset, double Amplitude, double PhaseDeg) FitSinusoid(
-            double[] t, double[] y, double freqHz)
+            double[] t, double[] y, double freqHz, double phaseOffsetRad = 0.0)
         {
             int n = Math.Min(t.Length, y.Length);
             if (n < 3) return (0, 0, 0);
 
             double w = 2.0 * Math.PI * freqHz;
-            // Normal equations for y ≈ c0 + a*cos(wt) + b*sin(wt)
+            // Normal equations for y ≈ c0 + a*cos(wt + phi0) + b*sin(wt + phi0)
             double[,] A = new double[3, 4];
             for (int i = 0; i < n; i++)
             {
-                double c = Math.Cos(w * t[i]);
-                double s = Math.Sin(w * t[i]);
+                double ang = w * t[i] + phaseOffsetRad;
+                double c = Math.Cos(ang);
+                double s = Math.Sin(ang);
                 double yi = y[i];
 
                 A[0, 0] += 1.0; A[0, 1] += c;     A[0, 2] += s;     A[0, 3] += yi;
@@ -407,35 +819,8 @@ namespace ControlGui.Core.Haptic
                 A[2, 0] += s;   A[2, 1] += c * s; A[2, 2] += s * s; A[2, 3] += s * yi;
             }
 
-            // Gaussian elimination with partial pivoting
-            for (int col = 0; col < 3; col++)
-            {
-                int pivot = col;
-                for (int r = col + 1; r < 3; r++)
-                {
-                    if (Math.Abs(A[r, col]) > Math.Abs(A[pivot, col])) pivot = r;
-                }
-                for (int k = col; k < 4; k++)
-                {
-                    (A[col, k], A[pivot, k]) = (A[pivot, k], A[col, k]);
-                }
-                double diag = A[col, col];
-                if (Math.Abs(diag) < 1e-12) return (0, 0, 0);
-                for (int r = col + 1; r < 3; r++)
-                {
-                    double factor = A[r, col] / diag;
-                    for (int k = col; k < 4; k++)
-                        A[r, k] -= factor * A[col, k];
-                }
-            }
-
-            double[] x = new double[3];
-            for (int r = 2; r >= 0; r--)
-            {
-                double sum = A[r, 3];
-                for (int k = r + 1; k < 3; k++) sum -= A[r, k] * x[k];
-                x[r] = sum / A[r, r];
-            }
+            if (!SolveLinearSystem(A, 3, out double[] x))
+                return (0, 0, 0);
 
             double c0 = x[0];
             double a = x[1];
@@ -444,6 +829,39 @@ namespace ControlGui.Core.Haptic
             // Relative to sin(wt): a*cos(wt) + b*sin(wt) = amp * sin(wt + phi) => phi = atan2(a, b)
             double phaseDeg = Math.Atan2(a, b) * (180.0 / Math.PI);
             return (c0, amp, phaseDeg);
+        }
+
+        private static bool SolveLinearSystem(double[,] A, int dim, out double[] x)
+        {
+            x = new double[dim];
+            for (int col = 0; col < dim; col++)
+            {
+                int pivot = col;
+                for (int r = col + 1; r < dim; r++)
+                {
+                    if (Math.Abs(A[r, col]) > Math.Abs(A[pivot, col])) pivot = r;
+                }
+                for (int k = col; k <= dim; k++)
+                {
+                    (A[col, k], A[pivot, k]) = (A[pivot, k], A[col, k]);
+                }
+                double diag = A[col, col];
+                if (Math.Abs(diag) < 1e-12) return false;
+                for (int r = col + 1; r < dim; r++)
+                {
+                    double factor = A[r, col] / diag;
+                    for (int k = col; k <= dim; k++)
+                        A[r, k] -= factor * A[col, k];
+                }
+            }
+
+            for (int r = dim - 1; r >= 0; r--)
+            {
+                double sum = A[r, dim];
+                for (int k = r + 1; k < dim; k++) sum -= A[r, k] * x[k];
+                x[r] = sum / A[r, r];
+            }
+            return true;
         }
 
         public static double? ComputeBandwidthFcHz(IReadOnlyList<BodePoint> points)
@@ -505,10 +923,27 @@ namespace ControlGui.Core.Haptic
                 );";
             cmd.ExecuteNonQuery();
 
+            double fMin = Math.Max(0.02, Math.Min(_cfg.FreqMinHz, _cfg.FreqMaxHz));
+            double fMax = Math.Max(fMin * 1.05, Math.Max(_cfg.FreqMinHz, _cfg.FreqMaxHz));
+            double f0 = _cfg.FreqDescending ? fMax : fMin;
+            double f1 = _cfg.FreqDescending ? fMin : fMax;
+            double totalDur = Math.Max(5.0, _cfg.TotalDurationSec);
+            double preSettleSec = Math.Clamp(_cfg.ChirpSettleSec, 0.0, totalDur * 0.25);
+
             var meta = new Dictionary<string, string>
             {
                 ["created_iso"] = DateTime.UtcNow.ToString("O"),
                 ["channel_index"] = _cfg.ChannelIndex.ToString(CultureInfo.InvariantCulture),
+                ["sweep_mode"] = _cfg.SweepMode == BandwidthSweepMode.Chirp ? "chirp" : "stepped_sine",
+                ["timing_mode"] = _cfg.TimingMode == SteppedTimingMode.TotalDurationSec ? "total_duration" : "fixed_cycles",
+                ["total_duration_sec"] = totalDur.ToString(CultureInfo.InvariantCulture),
+                ["freq_min_hz"] = fMin.ToString(CultureInfo.InvariantCulture),
+                ["freq_max_hz"] = fMax.ToString(CultureInfo.InvariantCulture),
+                ["freq_points"] = _cfg.FreqPoints.ToString(CultureInfo.InvariantCulture),
+                ["freq_descending"] = _cfg.FreqDescending ? "1" : "0",
+                ["chirp_f0_hz"] = f0.ToString(CultureInfo.InvariantCulture),
+                ["chirp_f1_hz"] = f1.ToString(CultureInfo.InvariantCulture),
+                ["chirp_settle_sec"] = preSettleSec.ToString(CultureInfo.InvariantCulture),
                 ["u0_pct"] = _cfg.U0Percent.ToString(CultureInfo.InvariantCulture),
                 ["ua_pct"] = _cfg.UaPercent.ToString(CultureInfo.InvariantCulture),
                 ["frequencies_hz"] = string.Join(",", _cfg.FrequenciesHz.Select(f => f.ToString(CultureInfo.InvariantCulture))),
@@ -587,16 +1022,32 @@ namespace ControlGui.Core.Haptic
                     tx.Commit();
                     batch.Clear();
                 }
+
+                if (_bodeDirty)
+                {
+                    _bodeDirty = false;
+                    FlushBodeSummary(conn);
+                }
+            }
+
+            if (_bodeDirty)
+            {
+                _bodeDirty = false;
+                FlushBodeSummary(conn);
             }
         }
 
         private void UpdateBodeSummaryInDb()
         {
+            _bodeDirty = true;
+        }
+
+        private void FlushBodeSummary(SqliteConnection conn)
+        {
             List<BodePoint> copy;
             lock (_lock) copy = new List<BodePoint>(_bodePoints);
+            if (copy.Count == 0) return;
 
-            using var conn = new SqliteConnection($"Data Source={_cfg.DbPath}");
-            conn.Open();
             using var tx = conn.BeginTransaction();
             foreach (var p in copy)
             {

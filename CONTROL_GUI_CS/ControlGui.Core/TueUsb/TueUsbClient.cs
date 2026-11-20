@@ -101,6 +101,13 @@ namespace ControlGui.Core.TueUsb
         private ushort _mockAdcCrcErr = 0;
         private uint _mockAdcTotal = 0;
 
+        // Simulated 2nd-order pneumatic plant (fc ≈ 4.5 Hz) when 0x300 haptic commands are driven in mock mode
+        private bool _mockHapticDriven = false;
+        private readonly double[] _mockHapticTargetPct = new double[5];
+        private readonly double[] _mockPlantY = new double[5];
+        private readonly double[] _mockPlantV = new double[5];
+        private double _mockPlantLastT = -1.0;
+
         public Action<Frame>? OnTx { get; set; }
         public Action<Frame>? OnRx { get; set; }
         public Action<Frame>? OnAsync { get; set; }
@@ -362,10 +369,74 @@ namespace ControlGui.Core.TueUsb
             }
         }
 
+        public void UpdateMockHapticCommand(byte[] payload)
+        {
+            if (!Mock || payload == null || payload.Length < 5) return;
+            lock (_lock)
+            {
+                double tNow = _mockUptime.Elapsed.TotalSeconds;
+                if (_mockHapticDriven)
+                    AdvanceMockPlantLocked(tNow);
+                else
+                    _mockPlantLastT = tNow;
+
+                for (int i = 0; i < 5; i++)
+                {
+                    double target = payload[i] * 100.0 / 255.0;
+                    if (!_mockHapticDriven)
+                    {
+                        _mockPlantY[i] = target;
+                        _mockPlantV[i] = 0.0;
+                    }
+                    _mockHapticTargetPct[i] = target;
+                }
+                _mockHapticDriven = true;
+            }
+        }
+
+        private void AdvanceMockPlantLocked(double tNow)
+        {
+            if (_mockPlantLastT < 0.0)
+            {
+                _mockPlantLastT = tNow;
+                return;
+            }
+            double dtTotal = Math.Clamp(tNow - _mockPlantLastT, 0.0, 0.2);
+            _mockPlantLastT = tNow;
+            if (dtTotal <= 1e-6) return;
+
+            const double wn = 2.0 * Math.PI * 4.5;
+            const double zeta = 0.70;
+            int subSteps = Math.Max(1, (int)Math.Ceiling(dtTotal / 0.0005));
+            double dt = dtTotal / subSteps;
+
+            for (int s = 0; s < subSteps; s++)
+            {
+                for (int i = 0; i < 5; i++)
+                {
+                    double a = wn * wn * (_mockHapticTargetPct[i] - _mockPlantY[i]) - 2.0 * zeta * wn * _mockPlantV[i];
+                    _mockPlantV[i] += a * dt;
+                    _mockPlantY[i] += _mockPlantV[i] * dt;
+                }
+            }
+        }
+
         private ushort[] BuildMockAdcChannels()
         {
             double t = _mockUptime.Elapsed.TotalSeconds;
             var ch = new ushort[5];
+            if (_mockHapticDriven)
+            {
+                AdvanceMockPlantLocked(t);
+                for (int i = 0; i < 5; i++)
+                {
+                    // Map 0..100% chamber pressure response to 500..2900 mV (12-bit 3300 mV ADC)
+                    double mv = 500.0 + 24.0 * _mockPlantY[i];
+                    ch[i] = (ushort)Math.Clamp((int)Math.Round(mv * 4095.0 / 3300.0), 0, 4095);
+                }
+                return ch;
+            }
+
             for (int i = 0; i < 5; i++)
             {
                 ch[i] = (ushort)Math.Clamp((int)(2048 + 1800 * Math.Sin(t * 0.8 + i * 0.9)), 0, 4095);

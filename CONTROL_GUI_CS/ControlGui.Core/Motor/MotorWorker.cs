@@ -115,6 +115,19 @@ namespace ControlGui.Core.Motor
 
         public int WriteFrame(byte[] frame)
         {
+            if (Mock)
+            {
+                if (frame == null || frame.Length == 0) return 0;
+                try
+                {
+                    var parsed = Frame.FromBytes(frame);
+                    if (parsed.CanId == 0x00000300)
+                        _client?.UpdateMockHapticCommand(parsed.Payload);
+                }
+                catch { }
+                return frame.Length;
+            }
+
             if (_rawTransport == null || !_rawTransport.IsOpen)
                 return 0;
 

@@ -31,10 +31,10 @@
                     </StackPanel>
                 </GroupBox>
 
-                <GroupBox Header="Excitation Signal u(t) = u0 + ua·sin(2πft)" FontWeight="Bold" Margin="0,0,0,8">
+                <GroupBox Header="Excitation Signal u(t) = u0 + ua·sin(φ(t))" FontWeight="Bold" Margin="0,0,0,8">
                     <Grid Margin="6">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="135"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
@@ -45,10 +45,15 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Target Channel:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
-                        <ComboBox x:Name="CboChannel" Grid.Row="0" Grid.Column="1" Margin="0,4" FontWeight="Normal">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Target Channel:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                        <ComboBox x:Name="CboChannel" Grid.Row="0" Grid.Column="1" Margin="0,3" FontWeight="Normal">
                             <ComboBoxItem Content="Ch 0 — A (Tip)" Tag="0" IsSelected="True"/>
                             <ComboBoxItem Content="Ch 1 — B (Mid)" Tag="1"/>
                             <ComboBoxItem Content="Ch 2 — C (Base)" Tag="2"/>
@@ -57,22 +62,83 @@
                             <ComboBoxItem Content="All 5 Channels (0..4)" Tag="-1"/>
                         </ComboBox>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Bias u0 (%):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
-                        <TextBox x:Name="TxtU0" Grid.Row="1" Grid.Column="1" Text="50.0" Margin="0,4" FontWeight="Normal"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Sweep Mode:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                        <ComboBox x:Name="CboSweepMode" Grid.Row="1" Grid.Column="1" Margin="0,3" FontWeight="Normal" SelectionChanged="OnParamChanged">
+                            <ComboBoxItem Content="Stepped-Sine (Paper Sec. III-A-2)" Tag="stepped" IsSelected="True"/>
+                            <ComboBoxItem Content="Continuous Log-Chirp (T sec)" Tag="chirp"/>
+                        </ComboBox>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Amplitude ua (%):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
-                        <TextBox x:Name="TxtUa" Grid.Row="2" Grid.Column="1" Text="25.0" Margin="0,4" FontWeight="Normal"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Bias u0 / Amp ua (%):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                        <Grid Grid.Row="2" Grid.Column="1" Margin="0,3">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="6"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="TxtU0" Grid.Column="0" Text="50.0" FontWeight="Normal" ToolTip="Bias u0 (%)"/>
+                            <TextBox x:Name="TxtUa" Grid.Column="2" Text="25.0" FontWeight="Normal" ToolTip="Amplitude ua (%)"/>
+                        </Grid>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Frequencies (Hz):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
-                        <TextBox x:Name="TxtFreqs" Grid.Row="3" Grid.Column="1" Text="10, 7, 5, 4, 3, 2, 1, 0.5, 0.2, 0.1" Margin="0,4" FontWeight="Normal" ToolTip="Comma-separated frequencies (descending or ascending)"/>
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Freq Grid:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                        <ComboBox x:Name="CboFreqMode" Grid.Row="3" Grid.Column="1" Margin="0,3" FontWeight="Normal" SelectionChanged="OnParamChanged">
+                            <ComboBoxItem Content="Log-Spaced (Auto)" Tag="log" IsSelected="True"/>
+                            <ComboBoxItem Content="Custom List" Tag="custom"/>
+                        </ComboBox>
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Cycles / Freq:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
-                        <TextBox x:Name="TxtCycles" Grid.Row="4" Grid.Column="1" Text="10" Margin="0,4" FontWeight="Normal"/>
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="f_min / f_max / Pts:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                        <Grid x:Name="PanelLogFreq" Grid.Row="4" Grid.Column="1" Margin="0,3">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="4"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="4"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="4"/>
+                                <ColumnDefinition Width="52"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="TxtFMin" Grid.Column="0" Text="0.1" FontWeight="Normal" TextChanged="OnParamTextChanged" ToolTip="Start/min frequency (Hz)"/>
+                            <TextBox x:Name="TxtFMax" Grid.Column="2" Text="10" FontWeight="Normal" TextChanged="OnParamTextChanged" ToolTip="End/max frequency (Hz)"/>
+                            <TextBox x:Name="TxtFPoints" Grid.Column="4" Text="25" FontWeight="Normal" TextChanged="OnParamTextChanged" ToolTip="Number of log-spaced points / eval bins"/>
+                            <ComboBox x:Name="CboFreqOrder" Grid.Column="6" FontWeight="Normal" SelectionChanged="OnParamChanged" ToolTip="Sweep direction">
+                                <ComboBoxItem Content="Asc" Tag="asc" IsSelected="True"/>
+                                <ComboBoxItem Content="Desc" Tag="desc"/>
+                            </ComboBox>
+                        </Grid>
 
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Settle Cycles:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
-                        <TextBox x:Name="TxtSettle" Grid.Row="5" Grid.Column="1" Text="2" Margin="0,4" FontWeight="Normal"/>
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Frequencies (Hz):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                        <TextBox x:Name="TxtFreqs" Grid.Row="5" Grid.Column="1" Margin="0,3" FontWeight="Normal" TextWrapping="Wrap" MaxHeight="48" VerticalScrollBarVisibility="Auto" TextChanged="OnParamTextChanged" ToolTip="Frequencies in Hz (auto-generated in Log-Spaced mode, or edit manually in Custom mode)"/>
 
-                        <CheckBox x:Name="ChkZeroOthers" Grid.Row="6" Grid.ColumnSpan="2" Content="Hold inactive channels at 0% (uncheck = u0%)" IsChecked="True" FontWeight="Normal" Margin="0,6,0,2"/>
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Timing Mode:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                        <ComboBox x:Name="CboTimingMode" Grid.Row="6" Grid.Column="1" Margin="0,3" FontWeight="Normal" SelectionChanged="OnParamChanged">
+                            <ComboBoxItem Content="Total Duration (s)" Tag="total" IsSelected="True"/>
+                            <ComboBoxItem Content="Fixed Cycles / Freq" Tag="cycles"/>
+                        </ComboBox>
+
+                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Total Time / Settle (s):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                        <Grid Grid.Row="7" Grid.Column="1" Margin="0,3">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="6"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="TxtTotalSec" Grid.Column="0" Text="90" FontWeight="Normal" TextChanged="OnParamTextChanged" ToolTip="Target total experiment duration in seconds"/>
+                            <TextBox x:Name="TxtChirpSettle" Grid.Column="2" Text="1.0" FontWeight="Normal" TextChanged="OnParamTextChanged" ToolTip="Pre-chirp settle time at u0 (seconds)"/>
+                        </Grid>
+
+                        <TextBlock Grid.Row="8" Grid.Column="0" Text="Cycles / Settle Cyc:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                        <Grid Grid.Row="8" Grid.Column="1" Margin="0,3">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="6"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="TxtCycles" Grid.Column="0" Text="10" FontWeight="Normal" TextChanged="OnParamTextChanged" ToolTip="Desired measurement cycles per frequency (Fixed Cycles mode / upper target)"/>
+                            <TextBox x:Name="TxtSettle" Grid.Column="2" Text="2" FontWeight="Normal" TextChanged="OnParamTextChanged" ToolTip="Settle cycles before measuring"/>
+                        </Grid>
+
+                        <TextBlock x:Name="TxtSchedulePreview" Grid.Row="9" Grid.ColumnSpan="2" Text="Est: ---" FontSize="11" Foreground="#1565C0" FontWeight="Normal" TextWrapping="Wrap" Margin="0,3,0,2"/>
+
+                        <CheckBox x:Name="ChkZeroOthers" Grid.Row="10" Grid.ColumnSpan="2" Content="Hold inactive channels at 0% (uncheck = u0%)" IsChecked="True" FontWeight="Normal" Margin="0,4,0,2"/>
                     </Grid>
                 </GroupBox>
 
