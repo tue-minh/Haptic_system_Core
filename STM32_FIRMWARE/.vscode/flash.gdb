@@ -7,7 +7,7 @@ attach 1
 monitor halt
 monitor erase_mass
 
-file ./build/Debug/MM_Control.elf
+file ./build/Debug/MM_control.elf
 load
 
 monitor reset

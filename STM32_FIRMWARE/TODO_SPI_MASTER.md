@@ -7,7 +7,7 @@
 
 ---
 
-## 1. Slave Wire Frame Format (16 Bytes, Little-Endian)
+## 1. Slave Wire Frame Format (14 Bytes, Little-Endian, No CRC)
 
 Must match `ItvSpiFrame_t` in `STM32_FIRMWARE_SLAVE/Core/Src/main.c`:
 
@@ -18,7 +18,10 @@ Must match `ItvSpiFrame_t` in `STM32_FIRMWARE_SLAVE/Core/Src/main.c`:
 | `2` | 1 B | `seq` | Rolling sequence counter (`0..255`) |
 | `3` | 1 B | `status` | Bit `0`: `adc_valid`, Bit `1`: `adc_error` |
 | `4..13` | 10 B | `adc_raw[5]` | 5x `uint16_t` LE (`0..4095`, `PA0`–`PA4`) |
-| `14..15` | 2 B | `crc16` | CRC-16/CCITT-FALSE (`poly=0x1021`, `init=0xFFFF`) over bytes `[0..13]` |
+
+No CRC by design: chip-select delimits every frame and exactly one frame is
+clocked per CS assertion, so the start and length are already unambiguous. The
+master checks the SOF marker only, as a wiring/clocking sanity check.
 
 ---
 

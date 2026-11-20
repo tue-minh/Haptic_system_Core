@@ -20,6 +20,8 @@ namespace ControlGui.Core.Motor
 
         private readonly object _stateLock = new object();
         private readonly object _writeLock = new object();
+        private readonly object _clientIoLock = new object();
+        private volatile bool _pollingPaused = false;
         private MotorSnapshot _snapshot = new() { Connecting = true };
 
         private TueUsbClient? _client;
@@ -82,6 +84,32 @@ namespace ControlGui.Core.Motor
             lock (_stateLock)
             {
                 _snapshot = updateFn(_snapshot);
+            }
+        }
+
+        public void SetPollingPaused(bool paused)
+        {
+            _pollingPaused = paused;
+            _wakeEvent.Set();
+        }
+
+        public (ushort[] Channels, byte Status)? ReadSpiAdcChannelsDirect(int? csIdx = null, double timeoutSec = 0.05)
+        {
+            var c = _client;
+            if (c == null) return null;
+            lock (_clientIoLock)
+            {
+                return c.ReadSpiAdcChannels(csIdx, timeoutSec);
+            }
+        }
+
+        public SpiAdcCtrlStatus? ConfigureSpiAdcDirect(bool enable, byte busId, byte csIdx, byte periodMs)
+        {
+            var c = _client;
+            if (c == null) return null;
+            lock (_clientIoLock)
+            {
+                return c.ConfigureSpiAdc(enable, busId, csIdx, periodMs);
             }
         }
 
@@ -624,7 +652,7 @@ namespace ControlGui.Core.Motor
                 {
                     try
                     {
-                        urgentCmd(c);
+                        lock (_clientIoLock) { urgentCmd(c); }
                         NoteSuccess();
                     }
                     catch (Exception ex)
@@ -639,7 +667,7 @@ namespace ControlGui.Core.Motor
                 {
                     try
                     {
-                        cmd(c);
+                        lock (_clientIoLock) { cmd(c); }
                         NoteSuccess();
                     }
                     catch (Exception ex)
@@ -649,11 +677,11 @@ namespace ControlGui.Core.Motor
                     handled = true;
                 }
 
-                // 3. Periodic telemetry poll
+                // 3. Periodic telemetry poll (skipped while Bandwidth Sweep owns the link)
                 double now = sw.Elapsed.TotalSeconds;
-                if (now >= nextPoll)
+                if (!_pollingPaused && now >= nextPoll)
                 {
-                    PollTelemetry(c);
+                    lock (_clientIoLock) { PollTelemetry(c); }
                     nextPoll = sw.Elapsed.TotalSeconds + pollPeriodSec;
                     handled = true;
 

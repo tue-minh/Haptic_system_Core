@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Windows;
+using ControlGui.Wpf.Windows;
 
 namespace ControlGui.Wpf;
 
@@ -25,5 +26,21 @@ public partial class App : Application
             MessageBox.Show(log, "Dispatcher Error", MessageBoxButton.OK, MessageBoxImage.Error);
             args.Handled = true;
         };
+    }
+
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        base.OnStartup(e);
+
+        bool bandwidthOnly = Array.Exists(
+            e.Args,
+            a => string.Equals(a, "--bandwidth", StringComparison.OrdinalIgnoreCase));
+
+        Window win = bandwidthOnly
+            ? new BandwidthExperimentWindow(() => null) { WindowStartupLocation = WindowStartupLocation.CenterScreen }
+            : new MainWindow();
+
+        MainWindow = win;
+        win.Show();
     }
 }

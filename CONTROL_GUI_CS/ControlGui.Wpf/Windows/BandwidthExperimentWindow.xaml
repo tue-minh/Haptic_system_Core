@@ -1,0 +1,188 @@
+<Window x:Class="ControlGui.Wpf.Windows.BandwidthExperimentWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Bandwidth Sweep Experiment (Exp 1b) — Real-Time &amp; SQLite"
+        Height="860" Width="1340"
+        WindowStartupLocation="CenterOwner"
+        Background="#FAFAFA">
+    <Grid Margin="10">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="360"/>
+            <ColumnDefinition Width="10"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left Column: Control Parameters -->
+        <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <GroupBox Header="STM32 USB CDC Connection" FontWeight="Bold" Margin="0,0,0,8">
+                    <StackPanel Margin="6">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ComboBox x:Name="CboComPort" Grid.Column="0" FontWeight="Normal" Margin="0,0,6,0"/>
+                            <Button x:Name="BtnRefreshCom" Grid.Column="1" Content="↻" Width="28" Margin="0,0,6,0" Click="OnRefreshCom" FontWeight="Normal" ToolTip="Refresh COM ports"/>
+                            <Button x:Name="BtnConnectCom" Grid.Column="2" Content="Connect" Width="78" Click="OnConnectComClick" FontWeight="Bold"/>
+                        </Grid>
+                        <TextBlock x:Name="TxtComStatus" Text="Not connected" FontSize="11" Foreground="#616161" FontWeight="Normal" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="Excitation Signal u(t) = u0 + ua·sin(2πft)" FontWeight="Bold" Margin="0,0,0,8">
+                    <Grid Margin="6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Target Channel:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
+                        <ComboBox x:Name="CboChannel" Grid.Row="0" Grid.Column="1" Margin="0,4" FontWeight="Normal">
+                            <ComboBoxItem Content="Ch 0 — A (Tip)" Tag="0" IsSelected="True"/>
+                            <ComboBoxItem Content="Ch 1 — B (Mid)" Tag="1"/>
+                            <ComboBoxItem Content="Ch 2 — C (Base)" Tag="2"/>
+                            <ComboBoxItem Content="Ch 3 — D (Left)" Tag="3"/>
+                            <ComboBoxItem Content="Ch 4 — E (Right)" Tag="4"/>
+                            <ComboBoxItem Content="All 5 Channels (0..4)" Tag="-1"/>
+                        </ComboBox>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Bias u0 (%):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
+                        <TextBox x:Name="TxtU0" Grid.Row="1" Grid.Column="1" Text="50.0" Margin="0,4" FontWeight="Normal"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Amplitude ua (%):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
+                        <TextBox x:Name="TxtUa" Grid.Row="2" Grid.Column="1" Text="25.0" Margin="0,4" FontWeight="Normal"/>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Frequencies (Hz):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
+                        <TextBox x:Name="TxtFreqs" Grid.Row="3" Grid.Column="1" Text="10, 7, 5, 4, 3, 2, 1, 0.5, 0.2, 0.1" Margin="0,4" FontWeight="Normal" ToolTip="Comma-separated frequencies (descending or ascending)"/>
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Cycles / Freq:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
+                        <TextBox x:Name="TxtCycles" Grid.Row="4" Grid.Column="1" Text="10" Margin="0,4" FontWeight="Normal"/>
+
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Settle Cycles:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
+                        <TextBox x:Name="TxtSettle" Grid.Row="5" Grid.Column="1" Text="2" Margin="0,4" FontWeight="Normal"/>
+
+                        <CheckBox x:Name="ChkZeroOthers" Grid.Row="6" Grid.ColumnSpan="2" Content="Hold inactive channels at 0% (uncheck = u0%)" IsChecked="True" FontWeight="Normal" Margin="0,6,0,2"/>
+                    </Grid>
+                </GroupBox>
+
+                <GroupBox Header="Real-Time Sampling &amp; SPI Link" FontWeight="Bold" Margin="0,0,0,8">
+                    <Grid Margin="6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Sample Rate (Hz):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
+                        <TextBox x:Name="TxtRateHz" Grid.Row="0" Grid.Column="1" Text="100" Margin="0,4" FontWeight="Normal"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="SPI Bus / CS:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
+                        <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
+                            <ComboBox x:Name="CboSpiBus" Width="90" Margin="0,0,6,0" FontWeight="Normal">
+                                <ComboBoxItem Content="SPI1" Tag="1" IsSelected="True"/>
+                                <ComboBoxItem Content="SPI3" Tag="3"/>
+                            </ComboBox>
+                            <ComboBox x:Name="CboSpiCs" Width="90" FontWeight="Normal">
+                                <ComboBoxItem Content="CS1 (0)" Tag="0" IsSelected="True"/>
+                                <ComboBoxItem Content="CS2 (1)" Tag="1"/>
+                                <ComboBoxItem Content="CS3 (2)" Tag="2"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="SPI Poll Period (ms):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
+                        <TextBox x:Name="TxtSpiPeriod" Grid.Row="2" Grid.Column="1" Text="5" Margin="0,4" FontWeight="Normal"/>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="ADC Vref (mV):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
+                        <TextBox x:Name="TxtVref" Grid.Row="3" Grid.Column="1" Text="3300" Margin="0,4" FontWeight="Normal"/>
+                    </Grid>
+                </GroupBox>
+
+                <GroupBox Header="SQLite Logging" FontWeight="Bold" Margin="0,0,0,8">
+                    <StackPanel Margin="6">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="TxtDbPath" Grid.Column="0" FontWeight="Normal" Margin="0,0,6,0"/>
+                            <Button x:Name="BtnBrowseDb" Grid.Column="1" Content="..." Width="30" Click="OnBrowseDb" FontWeight="Normal"/>
+                        </Grid>
+                        <TextBlock Text="Tables: experiment_meta, samples, bode_summary" FontSize="11" Foreground="#616161" FontWeight="Normal" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </GroupBox>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch" Margin="0,2,0,8">
+                    <Button x:Name="BtnStart" Content="Start Sweep" Width="165" Height="34" Background="#1976D2" Foreground="White" FontWeight="Bold" Margin="0,0,8,0" Click="OnStartClick"/>
+                    <Button x:Name="BtnStop" Content="Stop" Width="165" Height="34" IsEnabled="False" FontWeight="Bold" Click="OnStopClick"/>
+                </StackPanel>
+
+                <GroupBox Header="Experiment Status" FontWeight="Bold">
+                    <StackPanel Margin="6">
+                        <ProgressBar x:Name="ProgSweep" Height="14" Minimum="0" Maximum="1" Value="0" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtStatus" Text="Idle — ready" FontFamily="Consolas" FontSize="11" FontWeight="Normal" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="TxtBandwidth" Text="Bandwidth (-3 dB): --- Hz" FontSize="14" FontWeight="Bold" Foreground="#D32F2F" Margin="0,6,0,0"/>
+                    </StackPanel>
+                </GroupBox>
+            </StackPanel>
+        </ScrollViewer>
+
+        <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" Background="#E0E0E0"/>
+
+        <!-- Right Column: Real-Time Time-Domain & Bode Plots -->
+        <Grid Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" MinHeight="220"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="*" MinHeight="220"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="170"/>
+            </Grid.RowDefinitions>
+
+            <GroupBox Grid.Row="0" Header="Real-Time Waveform: Command u(t) % (Blue) vs Measured ADC mV (Red)" FontWeight="Bold">
+                <Border Background="#FFFFFF" BorderBrush="#E0E0E0" BorderThickness="1" Margin="4">
+                    <Canvas x:Name="CanvasTime" ClipToBounds="True" SizeChanged="OnCanvasSizeChanged"/>
+                </Border>
+            </GroupBox>
+
+            <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" Background="#E0E0E0"/>
+
+            <GroupBox Grid.Row="2" Header="Bode Magnitude M(f) (dB) vs Frequency (Hz) — Dashed = -3 dB" FontWeight="Bold">
+                <Border Background="#FFFFFF" BorderBrush="#E0E0E0" BorderThickness="1" Margin="4">
+                    <Canvas x:Name="CanvasBode" ClipToBounds="True" SizeChanged="OnCanvasSizeChanged"/>
+                </Border>
+            </GroupBox>
+
+            <GridSplitter Grid.Row="3" Height="4" HorizontalAlignment="Stretch" Background="#E0E0E0"/>
+
+            <GroupBox Grid.Row="4" Header="Bode Summary Table (saved to SQLite bode_summary)" FontWeight="Bold">
+                <DataGrid x:Name="GridBode" AutoGenerateColumns="False" IsReadOnly="True" FontWeight="Normal" FontFamily="Consolas" FontSize="11" Margin="2">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Step" Binding="{Binding StepIdx}" Width="55"/>
+                        <DataGridTextColumn Header="Freq (Hz)" Binding="{Binding FreqHz, StringFormat=F2}" Width="90"/>
+                        <DataGridTextColumn Header="Amp (mV)" Binding="{Binding AmpMv, StringFormat=F2}" Width="100"/>
+                        <DataGridTextColumn Header="Mag (dB)" Binding="{Binding MagDb, StringFormat=F2}" Width="95"/>
+                        <DataGridTextColumn Header="Phase (deg)" Binding="{Binding PhaseDeg, StringFormat=F1}" Width="105"/>
+                        <DataGridTextColumn Header="DC (mV)" Binding="{Binding DcOffsetMv, StringFormat=F1}" Width="95"/>
+                        <DataGridTextColumn Header="Samples" Binding="{Binding NSamples}" Width="80"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </GroupBox>
+        </Grid>
+    </Grid>
+</Window>

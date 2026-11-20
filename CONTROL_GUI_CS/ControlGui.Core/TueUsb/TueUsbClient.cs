@@ -764,6 +764,14 @@ namespace ControlGui.Core.TueUsb
             return Decoders.HapticUartDiag(resp.Payload);
         }
 
+        public (ushort[] Channels, byte Status) ReadSpiAdcChannels(int? csIdx = null, double? timeoutSec = null)
+        {
+            var respAll = Transact(
+                new Frame(FrameType.Req, CanId.SensorAdcAll, Encoders.SensorAdcReq(csIdx)),
+                timeoutSec);
+            return Decoders.SensorAdcAll(respAll.Payload);
+        }
+
         public SpiAdcFeedback ReadSpiAdc(int? csIdx = null, double? timeoutSec = null)
         {
             var respAll = Transact(

@@ -53,7 +53,7 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-
+void SPI1_Slave_IRQHandler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
@@ -61,6 +61,7 @@ void Error_Handler(void);
 #define led_GPIO_Port GPIOC
 #define SPI1_NSS_Pin GPIO_PIN_6
 #define SPI1_NSS_GPIO_Port GPIOB
+#define SPI1_NSS_EXTI_IRQn EXTI9_5_IRQn
 
 /* USER CODE BEGIN Private defines */
 

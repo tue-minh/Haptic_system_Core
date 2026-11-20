@@ -1,0 +1,11 @@
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tue_spi_adc.c:49:17:rd_u16	16	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tue_spi_adc.c:64:13:parse_frame	32	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tue_spi_adc.c:83:13:cs_setup_delay	16	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tue_spi_adc.c:96:13:poll_slave	112	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tue_spi_adc.c:151:13:tue_spi_adc_task	24	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tue_spi_adc.c:169:6:tue_spi_adc_init	48	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tue_spi_adc.c:197:9:tue_spi_adc_active_index	4	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tue_spi_adc.c:202:6:tue_spi_adc_valid_index	16	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tue_spi_adc.c:207:6:tue_spi_adc_get_snapshot	40	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tue_spi_adc.c:223:6:tue_spi_adc_configure	16	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tue_spi_adc.c:244:6:tue_spi_adc_get_config	24	static

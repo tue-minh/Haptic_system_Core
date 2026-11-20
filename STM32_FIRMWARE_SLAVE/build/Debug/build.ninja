@@ -173,7 +173,7 @@ build STM32_FIRMWARE_SLAVE.elf: C_EXECUTABLE_LINKER__STM32_FIRMWARE_SLAVE_Debug 
   LINK_FLAGS = -mcpu=cortex-m3  -T "C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE_SLAVE/STM32F103XX_FLASH.ld" --specs=nano.specs -Wl,-Map=STM32_FIRMWARE_SLAVE.map -Wl,--gc-sections -Wl,--print-memory-usage
   LINK_LIBRARIES = -lm
   OBJECT_DIR = CMakeFiles\STM32_FIRMWARE_SLAVE.dir
-  POST_BUILD = cd .
+  POST_BUILD = C:\WINDOWS\system32\cmd.exe /C "cd /D C:\Users\nguye\OneDrive\Desktop\Control\STM32_FIRMWARE_SLAVE\build\Debug && arm-none-eabi-objcopy -O binary C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE_SLAVE/build/Debug/STM32_FIRMWARE_SLAVE.elf C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE_SLAVE/build/Debug/STM32_FIRMWARE_SLAVE.bin"
   PRE_LINK = cd .
   TARGET_FILE = STM32_FIRMWARE_SLAVE.elf
   TARGET_PDB = STM32_FIRMWARE_SLAVE.elf.dbg

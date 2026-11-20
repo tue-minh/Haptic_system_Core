@@ -19,6 +19,9 @@
             <Button x:Name="BtnPingEsp32" Content="Ping ESP32 (UART 115200)" Height="26" Margin="0,0,0,4" IsEnabled="False" Click="OnPingEsp32Click"
                     ToolTip="Sends CAN 0x301 to the STM32, which pings the ESP32 slave over USART2 at 115200 baud."/>
 
+            <Button x:Name="BtnBandwidthSweep" Content="Bandwidth Sweep GUI (Exp 1b)..." Height="26" Margin="0,0,0,6" Click="OnBandwidthSweepClick"
+                    ToolTip="Open the real-time Stepped-Sine Bandwidth Sweep &amp; SQLite Logger GUI."/>
+
             <TextBlock x:Name="TxtPingResult" Text="ESP32 ping: not run" Foreground="#757575" FontSize="11" TextWrapping="Wrap"/>
         </StackPanel>
     </GroupBox>

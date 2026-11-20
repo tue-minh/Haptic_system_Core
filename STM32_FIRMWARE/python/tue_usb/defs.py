@@ -135,6 +135,7 @@ class CanId(IntEnum):
     SENSOR_ADC_CH4_META = 0x501
     SENSOR_SPI_CTRL = 0x502
     SENSOR_ADC_ALL = 0x503
+    SENSOR_ADC_RAW = 0x504
 
     # --- User custom range (host streams, firmware forwards to UART slave) ---
     HAPTIC_TELEMETRY = 0x300

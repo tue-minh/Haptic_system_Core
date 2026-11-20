@@ -1,0 +1,5 @@
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/main.c:74:5:main	8	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/main.c:143:6:SystemClock_Config	88	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/main.c:190:6:HAL_GPIO_EXTI_Callback	16	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/main.c:204:6:HAL_TIM_PeriodElapsedCallback	16	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/main.c:227:6:Error_Handler	8	static

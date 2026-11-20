@@ -170,6 +170,10 @@ typedef enum {
 #define TUE_USB_CAN_SENSOR_ADC_CH4_META 0x501U
 #define TUE_USB_CAN_SENSOR_SPI_CTRL    0x502U
 #define TUE_USB_CAN_SENSOR_ADC_ALL     0x503U
+/* Diagnostic: the first 8 bytes the SPI master actually received, verbatim.
+ * Request payload may carry a logical slave index (DLC 0 = active slave).
+ * Response: raw[0..7] of the last transfer. Not part of normal polling. */
+#define TUE_USB_CAN_SENSOR_ADC_RAW     0x504U
 
 /* --- Reserved for user custom communication (MUST NOT be used internally) - */
 #define TUE_USB_CAN_RESERVED_BASE    0x300U
@@ -262,6 +266,7 @@ TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_ADC_CH0_3);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_ADC_CH4_META);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_SPI_CTRL);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_ADC_ALL);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_ADC_RAW);
 
 /* Decoded frame -------------------------------------------------------------*/
 typedef struct __attribute__((packed)) {

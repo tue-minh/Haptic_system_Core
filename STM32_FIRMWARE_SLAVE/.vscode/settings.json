@@ -1,8 +1,4 @@
 {
-  "cmake.environment": {
-    "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}"
-  },
-  "cmake.configureEnvironment": {
-    "PATH": "C:\\msys64\\ucrt64\\bin;${env:PATH}"
-  }
+  "cmake.useCMakePresets": "always",
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
 }

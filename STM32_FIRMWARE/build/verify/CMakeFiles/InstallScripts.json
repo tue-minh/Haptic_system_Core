@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/build/verify/cmake_install.cmake",
+		"C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/build/verify/cmake/stm32cubemx/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

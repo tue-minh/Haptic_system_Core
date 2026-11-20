@@ -387,9 +387,9 @@ class TueUsbClient:
         elif can_id == CanId.SERVO_MEM_WRITE or can_id == CanId.SERVO_SET_ID or can_id == CanId.SERVO_RESET:
             return [Frame(FrameType.RESP_OK, can_id, bytes([p[0], 0]), seq)]
 
-        # 4. SPI ADC feedback (0x500 - 0x503)
+        # 4. SPI ADC feedback (0x500 - 0x504)
         elif can_id in (CanId.SENSOR_ADC_CH0_3, CanId.SENSOR_ADC_CH4_META,
-                        CanId.SENSOR_ADC_ALL):
+                        CanId.SENSOR_ADC_ALL, CanId.SENSOR_ADC_RAW):
             t = time.time()
             ch = [max(0, min(4095, int(2048 + 1800 * math.sin(t * 0.8 + i * 0.9))))
                   for i in range(5)]
@@ -397,7 +397,11 @@ class TueUsbClient:
             self._mock_adc_rx_ok = (self._mock_adc_rx_ok + 1) & 0xFFFF
             self._mock_adc_total += 1
             status = self._mock_adc_status
-            if can_id == CanId.SENSOR_ADC_CH0_3:
+            if can_id == CanId.SENSOR_ADC_RAW:
+                raw = bytes([0xAA, 0x55, self._mock_adc_seq, status]) + \
+                      struct.pack("<H", ch[0])
+                payload = (raw + b"\x00" * 8)[:8]
+            elif can_id == CanId.SENSOR_ADC_CH0_3:
                 payload = struct.pack("<4H", *ch[:4])
             elif can_id == CanId.SENSOR_ADC_CH4_META:
                 payload = struct.pack("<HBBHH", ch[4], self._mock_adc_seq, status,

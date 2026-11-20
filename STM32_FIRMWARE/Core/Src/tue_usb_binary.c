@@ -500,7 +500,7 @@ static void usb_dispatch(const tue_usb_frame_t *f, const uint8_t *raw,
         /* Ping the ESP32 slave over USART2, or report the local link state. */
         err = haptic_cmd(f, out, &out_dlc);
     } else if ((f->can_id >= TUE_USB_CAN_SENSOR_ADC_CH0_3) &&
-               (f->can_id <= TUE_USB_CAN_SENSOR_ADC_ALL)) {
+               (f->can_id <= TUE_USB_CAN_SENSOR_ADC_RAW)) {
         /* Cached ITV valve ADC feedback acquired over SPI1/SPI3. */
         err = spi_adc_cmd(f, out, &out_dlc);
     } else if (TUE_USB_CAN_ID_IS_RESERVED(f->can_id)) {
@@ -616,6 +616,20 @@ static int spi_adc_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc)
         tue_spi_adc_snapshot_t s;
         tue_spi_adc_get_snapshot(idx, &s);
         spi_adc_pack12(s.adc_raw, s.status, out);
+        *out_dlc = 8U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_SENSOR_ADC_RAW: {
+        uint8_t idx = spi_adc_requested_index(f);
+        if (!tue_spi_adc_valid_index(idx)) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+        tue_spi_adc_snapshot_t s;
+        tue_spi_adc_get_snapshot(idx, &s);
+        for (uint8_t i = 0U; i < 8U; i++) {
+            out[i] = s.raw[i];   /* verbatim received bytes, for diagnosis */
+        }
         *out_dlc = 8U;
         return (int)TUE_USB_ERR_OK;
     }

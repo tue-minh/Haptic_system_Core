@@ -1,0 +1,6 @@
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tim.c:32:6:MX_TIM1_Init	96	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tim.c:110:6:MX_TIM3_Init	64	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tim.c:176:6:MX_TIM4_Init	64	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tim.c:242:6:HAL_TIM_Base_MspInit	32	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tim.c:293:6:HAL_TIM_MspPostInit	48	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/tim.c:370:6:HAL_TIM_Base_MspDeInit	16	static

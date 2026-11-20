@@ -51,58 +51,44 @@ static uint16_t rd_u16(const uint8_t *p)
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
 }
 
-static uint16_t crc16_ccitt_false(const uint8_t *data, uint32_t len)
-{
-    uint16_t crc = 0xFFFFU;
-    for (uint32_t i = 0U; i < len; i++) {
-        crc ^= (uint16_t)data[i] << 8;
-        for (uint8_t bit = 0U; bit < 8U; bit++) {
-            if ((crc & 0x8000U) != 0U) {
-                crc = (uint16_t)((crc << 1) ^ 0x1021U);
-            } else {
-                crc = (uint16_t)(crc << 1);
-            }
-        }
-    }
-    return crc;
-}
-
-static bool parse_burst(const uint8_t *buf, uint32_t len,
+/*
+ * Parse one received frame.
+ *
+ * Frame layout (14 bytes, little-endian), no CRC by design:
+ *   [0..1] SOF 0xAA 0x55 | [2] seq | [3] status | [4..13] adc_raw[0..4] (u16)
+ *
+ * The slave sends exactly one frame per chip-select pulse, so the start and
+ * length are already guaranteed by the CS framing; only the SOF marker is
+ * checked, to catch a wiring/clocking fault rather than silent corruption.
+ */
+static bool parse_frame(const uint8_t *buf, uint32_t len,
                         tue_spi_adc_snapshot_t *out)
 {
-    bool found = false;
-    uint32_t pos = 0U;
-
-    while ((pos + TUE_SPI_ADC_FRAME_LEN) <= len) {
-        if ((buf[pos] != TUE_SPI_ADC_SOF0) ||
-            (buf[pos + 1U] != TUE_SPI_ADC_SOF1)) {
-            pos++;
-            continue;
-        }
-
-        uint16_t crc_rx = rd_u16(&buf[pos + 14U]);
-        uint16_t crc_calc = crc16_ccitt_false(&buf[pos], 14U);
-        if (crc_rx != crc_calc) {
-            pos++;
-            continue;
-        }
-
-        out->seq = buf[pos + 2U];
-        out->status = buf[pos + 3U];
-        for (uint32_t ch = 0U; ch < TUE_SPI_ADC_CHANNEL_COUNT; ch++) {
-            out->adc_raw[ch] = rd_u16(&buf[pos + 4U + (ch * 2U)]);
-        }
-        out->valid = true;
-        found = true;
-        pos += TUE_SPI_ADC_FRAME_LEN;
+    if (len < TUE_SPI_ADC_FRAME_LEN) {
+        return false;
+    }
+    if ((buf[0] != TUE_SPI_ADC_SOF0) || (buf[1] != TUE_SPI_ADC_SOF1)) {
+        return false;
     }
 
-    return found;
+    out->seq = buf[2];
+    out->status = buf[3];
+    for (uint32_t ch = 0U; ch < TUE_SPI_ADC_CHANNEL_COUNT; ch++) {
+        out->adc_raw[ch] = rd_u16(&buf[4U + (ch * 2U)]);
+    }
+    out->valid = true;
+    return true;
 }
 
 static void cs_setup_delay(void)
 {
-    for (volatile uint32_t i = 0U; i < 200U; i++) {
+    /* The slave re-arms its DMA from the completion ISR *after* HAL has
+     * busy-waited for BSY, so it needs real time between CS edges. The old
+     * 200 NOPs was ~1 us - shorter than one DMA IRQ entry plus
+     * HAL_SPI_TransmitReceive_DMA() on the 72 MHz F103, which dropped the first
+     * bytes of the frame. ~25 us (at 168 MHz, 3500 NOPs) leaves ample margin
+     * and is negligible against the 10 ms poll period. */
+    for (volatile uint32_t i = 0U; i < 3500U; i++) {
         __NOP();
     }
 }
@@ -120,14 +106,29 @@ static bool poll_slave(uint8_t idx)
         TUE_SPI_ADC_SPI_TIMEOUT_MS);
 
     HAL_GPIO_WritePin(desc->cs_port, desc->cs_pin, GPIO_PIN_SET);
+    if (st != HAL_OK) {
+        (void)HAL_SPI_Abort(desc->spi);
+    }
 
     tue_spi_adc_snapshot_t parsed;
     memset(&parsed, 0, sizeof(parsed));
 
-    if ((st != HAL_OK) || !parse_burst(s_rx_burst, TUE_SPI_ADC_BURST_LEN, &parsed)) {
+    /* Always keep the first bytes of whatever arrived, valid or not: this is
+     * what tells a wiring fault apart from a framing error. */
+    {
         uint32_t primask = __get_PRIMASK();
         __disable_irq();
-        s_cache[idx].crc_err_cnt++;
+        memcpy(s_cache[idx].raw, s_rx_burst,
+               TUE_SPI_ADC_RAW_BYTES < TUE_SPI_ADC_BURST_LEN
+                   ? TUE_SPI_ADC_RAW_BYTES : TUE_SPI_ADC_BURST_LEN);
+        s_cache[idx].raw_len = (uint16_t)TUE_SPI_ADC_BURST_LEN;
+        __set_PRIMASK(primask);
+    }
+
+    if ((st != HAL_OK) || !parse_frame(s_rx_burst, TUE_SPI_ADC_BURST_LEN, &parsed)) {
+        uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+        s_cache[idx].crc_err_cnt++;   /* bad-frame counter (no CRC anymore) */
         __set_PRIMASK(primask);
         return false;
     }

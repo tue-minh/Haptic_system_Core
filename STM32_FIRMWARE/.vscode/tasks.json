@@ -2,14 +2,33 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Convert ELF to BIN",
+            "label": "Build Firmware",
             "type": "shell",
-            "command": "arm-none-eabi-objcopy",
+            "command": "cmake",
             "args": [
-                "-O",
-                "binary",
-                "${workspaceFolder}/build/Debug/MM_Control.elf",
-                "${workspaceFolder}/build/Debug/MM_Control.bin"
+                "--build",
+                "${workspaceFolder}/build/Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "Configure Firmware",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--preset",
+                "Debug",
+                "-B",
+                "${workspaceFolder}/build/Debug"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -26,7 +45,10 @@
                 "-s",
                 "0x08000000:leave",
                 "-D",
-                "${workspaceFolder}/build/Debug/MM_Control.bin"
+                "${workspaceFolder}/build/Debug/MM_control.bin"
+            ],
+            "dependsOn": [
+                "Build Firmware"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -40,6 +62,9 @@
             "args": [
                 "-x",
                 "${workspaceFolder}/.vscode/flash.gdb"
+            ],
+            "dependsOn": [
+                "Build Firmware"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

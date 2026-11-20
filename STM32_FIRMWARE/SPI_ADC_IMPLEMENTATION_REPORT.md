@@ -31,15 +31,23 @@
   | 5 | SPI3 | `PD2` (`SPI3_CS3`) | `bus_id = 3`, `cs_idx = 2` |
 
 - **Poll cycle** (`poll_slave()`), default 100 Hz:
-  1. Drive the selected CS LOW and wait a short setup delay (`cs_setup_delay()`, ~200 NOPs).
-  2. `HAL_SPI_TransmitReceive()` a burst of `TUE_SPI_ADC_BURST_FRAMES = 8` frames
-     (`128` bytes) with `SPI1`/`SPI3` already configured at `2.625 MHz`, mode 0, 8-bit MSB.
-  3. Drive CS HIGH and scan the burst with a **sliding window** that requires `SOF = AA 55`
-     and `CRC-16/CCITT-FALSE` over bytes `0..13`; the last valid frame wins.
+  1. Drive the selected CS LOW and wait a short setup delay (`cs_setup_delay()`,
+     ~25 µs — the slave re-arms its DMA from its completion ISR, so it needs real
+     time between CS edges; the original ~1 µs was too short and dropped the first
+     bytes of the frame).
+  2. `HAL_SPI_TransmitReceive()` **one** 16-byte frame with `SPI1`/`SPI3` already
+     configured at `2.625 MHz`, mode 0, 8-bit MSB.
+     `TUE_SPI_ADC_BURST_FRAMES` is pinned to `1` by a compile-time check — see the
+     header comment for why bursting multiple frames inside one CS window fails.
+  3. Drive CS HIGH and sanity-check the received frame: `SOF = AA 55`, then
+     decode `seq`, `status` and the five `uint16_t` ADC values. There is no CRC
+     on this link — CS delimits each frame and one frame is clocked per pulse.
   4. Publish `adc_raw[5]`, `seq`, `status`, `last_update_ms` under a `PRIMASK` critical
-     section and increment `rx_ok_cnt`; a failed/CRC-invalid burst increments `crc_err_cnt`.
+     section and increment `rx_ok_cnt`; a rejected frame increments `crc_err_cnt`.
 
-- **CRC** — `crc16_ccitt_false()` (`poly = 0x1021`, `init = 0xFFFF`) matches the slave.
+- **Frame check** — SOF marker only (no CRC; CS framing makes it redundant).
+  `crc_err_cnt` is retained for host compatibility but now counts rejected
+  frames (bad SOF or a failed SPI transfer).
 - **Background task** — `tue_spi_adc_init()` creates the FreeRTOS thread `tue_spi_adc`
   (`osPriorityNormal`, 2048-byte stack). It calls `osDelay(period_ms)` between polls and
   idles at 10 ms when disabled.

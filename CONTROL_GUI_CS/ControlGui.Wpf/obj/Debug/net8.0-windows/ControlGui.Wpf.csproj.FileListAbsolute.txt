@@ -182,3 +182,7 @@ d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net
 d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\ControlGui.Wpf.pdb
 d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\ControlGui.Wpf.genruntimeconfig.cache
 d:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\ref\ControlGui.Wpf.dll
+C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Panels\AdcPanel.baml
+C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Panels\AdcPanel.g.cs
+C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\BandwidthExperimentWindow.baml
+C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\BandwidthExperimentWindow.g.cs

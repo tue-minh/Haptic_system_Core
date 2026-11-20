@@ -180,7 +180,7 @@ namespace ControlGui.Wpf.Panels {
                 return;
             }
             _contentLoaded = true;
-            System.Uri resourceLocater = new System.Uri("/ControlGui.Wpf;V1.0.0.0;component/panels/stepperpanel.xaml", System.UriKind.Relative);
+            System.Uri resourceLocater = new System.Uri("/ControlGui.Wpf;component/panels/stepperpanel.xaml", System.UriKind.Relative);
             
             #line 1 "..\..\..\..\Panels\StepperPanel.xaml"
             System.Windows.Application.LoadComponent(this, resourceLocater);

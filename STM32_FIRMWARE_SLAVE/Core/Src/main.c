@@ -33,6 +33,13 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+/**
+ * @brief Wire frame sent to the SPI master (14 bytes, little-endian).
+ *
+ * No CRC on purpose: chip-select frames the transfer, and exactly one frame is
+ * clocked per CS assertion, so its start and length are already unambiguous.
+ * The SOF marker is kept purely as a sanity check.
+ */
 typedef struct __attribute__((packed))
 {
   uint8_t  sof0;
@@ -40,7 +47,6 @@ typedef struct __attribute__((packed))
   uint8_t  seq;
   uint8_t  status;
   uint16_t adc_raw[5];
-  uint16_t crc16;
 } ItvSpiFrame_t;
 /* USER CODE END PTD */
 
@@ -83,6 +89,7 @@ static volatile uint8_t  adc_valid = 0U;
 static volatile uint8_t  adc_seq = 0U;
 static volatile uint32_t adc_sample_count = 0U;
 static volatile uint32_t adc_error_count = 0U;
+static volatile uint8_t  adc_last_error = 0U;
 
 static uint8_t           spi_tx_buf[SPI_FRAME_SIZE];
 static uint8_t           spi_rx_buf[SPI_FRAME_SIZE];
@@ -91,6 +98,8 @@ static volatile uint8_t  spi_frame_front = 0U;
 static volatile uint8_t  spi_adc_dirty = 0U;
 static volatile uint8_t  spi_cs_active = 0U;
 static volatile uint8_t  spi_cs_restart_pending = 0U;
+static volatile uint16_t spi_tx_idx = 0U;
+static volatile uint16_t spi_rx_idx = 0U;
 static volatile uint32_t spi_tx_count = 0U;
 static volatile uint32_t spi_error_count = 0U;
 static volatile uint32_t spi_resync_count = 0U;
@@ -112,9 +121,9 @@ static uint32_t          log_period_ms = DEFAULT_LOG_PERIOD_MS;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-static uint16_t SPI1_CalcCRC16(const uint8_t *data, size_t len);
 static void SPI1_PackFrame(uint8_t *buf);
 static void SPI1_RearmSlaveDMA(void);
+static void SPI1_ServiceCompletedFrame(void);
 static void UART1_StartRxDMA(void);
 static uint8_t UART1_SendDMA(const char *msg, uint32_t wait_timeout_ms);
 static void ITV_LogSample(const uint16_t raw[ITV_CH_COUNT], uint32_t timestamp_ms, uint8_t wait_tx);
@@ -123,27 +132,6 @@ static void ITV_ProcessCommand(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static uint16_t SPI1_CalcCRC16(const uint8_t *data, size_t len)
-{
-  uint16_t crc = 0xFFFFU;
-  for (size_t i = 0U; i < len; i++)
-  {
-    crc ^= (uint16_t)data[i] << 8;
-    for (uint8_t bit = 0U; bit < 8U; bit++)
-    {
-      if ((crc & 0x8000U) != 0U)
-      {
-        crc = (uint16_t)((crc << 1) ^ 0x1021U);
-      }
-      else
-      {
-        crc = (uint16_t)(crc << 1);
-      }
-    }
-  }
-  return crc;
-}
-
 static void SPI1_PackFrame(uint8_t *buf)
 {
   ItvSpiFrame_t frame;
@@ -154,7 +142,7 @@ static void SPI1_PackFrame(uint8_t *buf)
   __disable_irq();
   frame.seq = adc_seq;
   frame.status = (adc_valid != 0U) ? 0x01U : 0x00U;
-  if (adc_error_count > 0U)
+  if (adc_last_error != 0U)
   {
     frame.status |= 0x02U;
   }
@@ -167,7 +155,6 @@ static void SPI1_PackFrame(uint8_t *buf)
     __enable_irq();
   }
 
-  frame.crc16 = SPI1_CalcCRC16((const uint8_t *)&frame, sizeof(frame) - sizeof(frame.crc16));
   memcpy(buf, &frame, sizeof(frame));
 }
 
@@ -181,6 +168,22 @@ static void SPI1_RearmSlaveDMA(void)
   {
     (void)HAL_SPI_Abort(&hspi1);
   }
+  /* Hardware-reset SPI1 when idle (CS HIGH) so any stray SCK/NSS glitch
+   * that shifted the internal bit counter cannot wedge subsequent frames. */
+  if (spi_cs_active == 0U)
+  {
+    __HAL_RCC_SPI1_FORCE_RESET();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __HAL_RCC_SPI1_RELEASE_RESET();
+    if (HAL_SPI_Init(&hspi1) != HAL_OK)
+    {
+      spi_error_count++;
+      return;
+    }
+  }
   __HAL_SPI_CLEAR_OVRFLAG(&hspi1);
   memcpy(spi_tx_buf, spi_frame_shadow[spi_frame_front], SPI_FRAME_SIZE);
   spi_adc_dirty = 0U;
@@ -188,6 +191,40 @@ static void SPI1_RearmSlaveDMA(void)
   if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
   {
     spi_error_count++;
+  }
+}
+
+/*
+ * Re-arm after a completed frame.
+ *
+ * Runs in DMA/SPI interrupt context, so it must not block. HAL's completion
+ * handler has already waited for BSY and set State back to READY by the time
+ * this is called; if it did NOT (a stale error), arming again here would fail
+ * and silently wedge the link, so fall back to the deferred restart in the
+ * main loop instead.
+ */
+static void SPI1_ServiceCompletedFrame(void)
+{
+  if (hspi1.State != HAL_SPI_STATE_READY)
+  {
+    spi_cs_restart_pending = 1U;
+    return;
+  }
+  /* If CS is still LOW (one-frame-per-CS protocol), wait for CS rising edge
+   * before arming the next frame so we never have to HAL_SPI_Abort() a
+   * pre-armed transfer when CS deasserts. */
+  if (spi_cs_active != 0U)
+  {
+    return;
+  }
+  __HAL_SPI_CLEAR_OVRFLAG(&hspi1);
+  memcpy(spi_tx_buf, spi_frame_shadow[spi_frame_front], SPI_FRAME_SIZE);
+  spi_adc_dirty = 0U;
+
+  if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
+  {
+    spi_error_count++;
+    spi_cs_restart_pending = 1U;
   }
 }
 
@@ -421,7 +458,10 @@ int main(void)
 
   SPI1_PackFrame(spi_frame_shadow[0]);
   spi_frame_front = 0U;
-  SPI1_RearmSlaveDMA();
+  /* Keep SPI1 disabled (SPE = 0) while CS is HIGH so SCK glitches cannot
+   * shift bits between frames; EXTI falling edge enables it per transfer. */
+  SPI1->CR2 = 0U;
+  SPI1->CR1 = SPI_CR1_SSM;
 
   uint32_t last_sample_tick = HAL_GetTick();
   uint32_t last_log_tick = HAL_GetTick();
@@ -453,6 +493,7 @@ int main(void)
       {
         adc_busy = 0U;
         adc_error_count++;
+        adc_last_error = 1U;
       }
     }
 
@@ -582,6 +623,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 
     adc_seq++;
     adc_valid = 1U;
+    adc_last_error = 0U;
     adc_sample_count++;
     adc_data_ready = 1U;
 
@@ -598,6 +640,7 @@ void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
   if (hadc->Instance == ADC1)
   {
     adc_error_count++;
+    adc_last_error = 1U;
     adc_busy = 0U;
   }
 }
@@ -607,12 +650,7 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
   if (hspi->Instance == SPI1)
   {
     spi_tx_count++;
-    memcpy(spi_tx_buf, spi_frame_shadow[spi_frame_front], SPI_FRAME_SIZE);
-    spi_adc_dirty = 0U;
-    if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
-    {
-      spi_error_count++;
-    }
+    SPI1_ServiceCompletedFrame();
   }
 }
 
@@ -624,17 +662,43 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
     __HAL_SPI_CLEAR_OVRFLAG(hspi);
     if (hspi->State == HAL_SPI_STATE_READY)
     {
-      memcpy(spi_tx_buf, spi_frame_shadow[spi_frame_front], SPI_FRAME_SIZE);
-      spi_adc_dirty = 0U;
-      if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
-      {
-        spi_error_count++;
-      }
+      SPI1_ServiceCompletedFrame();
     }
     else
     {
       spi_cs_restart_pending = 1U;
     }
+  }
+}
+
+void SPI1_Slave_IRQHandler(void)
+{
+  uint32_t sr = SPI1->SR;
+  if ((sr & SPI_SR_RXNE) != 0U)
+  {
+    uint8_t rx = (uint8_t)SPI1->DR;
+    if (spi_rx_idx < SPI_FRAME_SIZE)
+    {
+      spi_rx_buf[spi_rx_idx++] = rx;
+    }
+  }
+  if ((sr & SPI_SR_TXE) != 0U)
+  {
+    if (spi_tx_idx < SPI_FRAME_SIZE)
+    {
+      SPI1->DR = spi_tx_buf[spi_tx_idx++];
+    }
+    else
+    {
+      SPI1->DR = 0x00U;
+      SPI1->CR2 &= ~SPI_CR2_TXEIE;
+    }
+  }
+  if ((sr & SPI_SR_OVR) != 0U)
+  {
+    (void)SPI1->DR;
+    (void)SPI1->SR;
+    spi_error_count++;
   }
 }
 
@@ -645,16 +709,33 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     if (HAL_GPIO_ReadPin(SPI1_NSS_GPIO_Port, SPI1_NSS_Pin) == GPIO_PIN_RESET)
     {
       spi_cs_active = 1U;
-      __HAL_SPI_CLEAR_OVRFLAG(&hspi1);
-      if (hspi1.State == HAL_SPI_STATE_READY)
-      {
-        SPI1_RearmSlaveDMA();
-      }
+      /* Hard-reset SPI1 at CS falling edge so any prior glitch is cleared */
+      __HAL_RCC_SPI1_FORCE_RESET();
+      __NOP();
+      __NOP();
+      __HAL_RCC_SPI1_RELEASE_RESET();
+      SPI1->CR1 = SPI_CR1_SSM;
+      SPI1->CR2 = 0U;
+      memcpy(spi_tx_buf, spi_frame_shadow[spi_frame_front], SPI_FRAME_SIZE);
+      spi_tx_idx = 1U;
+      spi_rx_idx = 0U;
+      SPI1->DR = spi_tx_buf[0];
+      SPI1->CR2 = SPI_CR2_TXEIE | SPI_CR2_RXNEIE | SPI_CR2_ERRIE;
+      SPI1->CR1 = SPI_CR1_SSM | SPI_CR1_SPE;
     }
     else
     {
       spi_cs_active = 0U;
-      spi_cs_restart_pending = 1U;
+      SPI1->CR2 = 0U;
+      SPI1->CR1 = SPI_CR1_SSM;
+      if (spi_rx_idx >= SPI_FRAME_SIZE)
+      {
+        spi_tx_count++;
+      }
+      else if (spi_rx_idx > 0U)
+      {
+        spi_resync_count++;
+      }
     }
   }
 }

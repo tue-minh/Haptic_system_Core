@@ -2,14 +2,36 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "Build Firmware",
+            "type": "shell",
+            "command": "cube-cmake",
+            "args": [
+                "--build",
+                "${workspaceFolder}/build/Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
             "label": "Convert ELF to BIN",
             "type": "shell",
             "command": "arm-none-eabi-objcopy",
             "args": [
                 "-O",
                 "binary",
-                "${workspaceFolder}/build/Debug/MM_Control.elf",
-                "${workspaceFolder}/build/Debug/MM_Control.bin"
+                "${workspaceFolder}/build/Debug/STM32_FIRMWARE_SLAVE.elf",
+                "${workspaceFolder}/build/Debug/STM32_FIRMWARE_SLAVE.bin"
+            ],
+            "dependsOn": [
+                "Build Firmware"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -26,7 +48,11 @@
                 "-s",
                 "0x08000000:leave",
                 "-D",
-                "${workspaceFolder}/build/Debug/MM_Control.bin"
+                "${workspaceFolder}/build/Debug/STM32_FIRMWARE_SLAVE.bin"
+            ],
+            "dependsOn": [
+                "Build Firmware",
+                "Convert ELF to BIN"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -40,6 +66,9 @@
             "args": [
                 "-x",
                 "${workspaceFolder}/.vscode/flash.gdb"
+            ],
+            "dependsOn": [
+                "Build Firmware"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

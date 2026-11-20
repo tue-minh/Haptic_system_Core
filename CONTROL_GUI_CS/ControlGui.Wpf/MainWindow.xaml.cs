@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using ControlGui.Core.Haptic;
+using ControlGui.Wpf.Windows;
 using ControlGui.Core.Motor;
 using ControlGui.Core.Paxini;
 using ControlGui.Core.Recording;
@@ -62,6 +63,7 @@ namespace ControlGui.Wpf
             // Haptic Panel
             PanelHaptic.EnabledChanged += OnHapticToggled;
             PanelHaptic.PingRequested += OnPingEsp32;
+            PanelHaptic.BandwidthSweepRequested += OnOpenBandwidthSweep;
 
             // SPI ADC Panel
             PanelAdc.ApplyRequested += OnAdcApply;
@@ -206,6 +208,27 @@ namespace ControlGui.Wpf
         private void OnPingEsp32()
         {
             _motor?.PingHaptic();
+        }
+
+        private BandwidthExperimentWindow? _bandwidthWin;
+        private void OnOpenBandwidthSweep()
+        {
+            if (_bandwidthWin != null && _bandwidthWin.IsLoaded)
+            {
+                _bandwidthWin.Activate();
+                return;
+            }
+            // Pause background 100 Hz tactile streaming while Bandwidth Sweep window is open
+            if (PanelHaptic.IsStreamingEnabled)
+            {
+                PanelHaptic.ChkEnable.IsChecked = false;
+            }
+            _bandwidthWin = new BandwidthExperimentWindow(() => _motor, PostLog)
+            {
+                Owner = this
+            };
+            _bandwidthWin.Closed += (_, _) => _bandwidthWin = null;
+            _bandwidthWin.Show();
         }
 
         private void OnAdcApply(bool enable, byte busId, byte csIdx, byte periodMs)
