@@ -186,3 +186,7 @@ C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\
 C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Panels\AdcPanel.g.cs
 C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\BandwidthExperimentWindow.baml
 C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\BandwidthExperimentWindow.g.cs
+D:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Panels\AdcPanel.baml
+D:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\BandwidthExperimentWindow.baml
+D:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Panels\AdcPanel.g.cs
+D:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\BandwidthExperimentWindow.g.cs

@@ -1,8 +1,0 @@
-C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/build/verify/CMakeFiles/MM_control.dir
-C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/build/verify/CMakeFiles/edit_cache.dir
-C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/build/verify/CMakeFiles/rebuild_cache.dir
-C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/build/verify/cmake/stm32cubemx/CMakeFiles/STM32_Drivers.dir
-C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/build/verify/cmake/stm32cubemx/CMakeFiles/USB_Device_Library.dir
-C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/build/verify/cmake/stm32cubemx/CMakeFiles/FreeRTOS.dir
-C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/build/verify/cmake/stm32cubemx/CMakeFiles/edit_cache.dir
-C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/build/verify/cmake/stm32cubemx/CMakeFiles/rebuild_cache.dir

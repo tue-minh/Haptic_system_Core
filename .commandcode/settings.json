@@ -1,0 +1,47 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Edit(*)",
+      "Shell(cmake *)",
+      "Shell(dotnet *)",
+      "Shell(python *)",
+      "Shell(git status:*)",
+      "Shell(git log:*)",
+      "Shell(git diff:*)",
+      "Shell(git show:*)",
+      "Shell(git remote *)",
+      "Shell(git rev-parse *)",
+      "Shell(git add *)",
+      "Shell(git commit *)",
+      "Shell(git push:*)"
+    ],
+    "ask": [
+      "Shell(rm *)",
+      "Shell(rmdir *)",
+      "Shell(rd *)",
+      "Shell(del *)",
+      "Shell(erase *)",
+      "Shell(Remove-Item *)",
+      "Shell(find * -delete*)",
+      "Shell(git clean *)",
+      "Shell(git restore *)",
+      "Shell(git checkout -- *)",
+      "Read(~/**)",
+      "Edit(~/**)",
+      "Edit(.commandcode/settings.json)"
+    ],
+    "deny": [
+      "Shell(git reset --hard*)",
+      "Shell(git push --force*)",
+      "Shell(git push -f *)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.gnupg/**)",
+      "Edit(~/.ssh/**)",
+      "Edit(~/.aws/**)",
+      "Edit(~/.gnupg/**)",
+      "Edit(.git/**)"
+    ]
+  }
+}

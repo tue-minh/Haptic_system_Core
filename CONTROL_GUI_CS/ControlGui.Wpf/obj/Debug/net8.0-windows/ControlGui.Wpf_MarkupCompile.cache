@@ -4,16 +4,16 @@
 winexe
 C#
 .cs
-C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\
+D:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\
 ControlGui.Wpf
 none
 false
 TRACE;DEBUG;NET;NET8_0;NETCOREAPP;WINDOWS;WINDOWS7_0;NET5_0_OR_GREATER;NET6_0_OR_GREATER;NET7_0_OR_GREATER;NET8_0_OR_GREATER;NETCOREAPP1_0_OR_GREATER;NETCOREAPP1_1_OR_GREATER;NETCOREAPP2_0_OR_GREATER;NETCOREAPP2_1_OR_GREATER;NETCOREAPP2_2_OR_GREATER;NETCOREAPP3_0_OR_GREATER;NETCOREAPP3_1_OR_GREATER;WINDOWS7_0_OR_GREATER
-C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\App.xaml
+D:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\App.xaml
 13691048115
 
 192141023792
-204-243185482
+204897407852
 Controls\ForceHistoryPlot.xaml;Controls\Tactile3DView.xaml;Controls\TaxelMapView.xaml;Controls\ValveMapView.xaml;MainWindow.xaml;Panels\AdcPanel.xaml;Panels\ConnectionPanel.xaml;Panels\GripperPanel.xaml;Panels\HapticPanel.xaml;Panels\RecordingPanel.xaml;Panels\SensorMonitorPanel.xaml;Panels\StepperPanel.xaml;Windows\BandwidthExperimentWindow.xaml;
 
 False

@@ -1,20 +1,20 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj": {}
+    "D:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj": {}
   },
   "projects": {
-    "C:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj": {
+    "D:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj",
+        "projectUniqueName": "D:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj",
         "projectName": "ControlGui.Core",
-        "projectPath": "C:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj",
-        "packagesPath": "C:\\Users\\nguye\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Core\\obj\\",
+        "projectPath": "D:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj",
+        "packagesPath": "C:\\Users\\ADMIN\\.nuget\\packages\\",
+        "outputPath": "D:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Core\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
-          "C:\\Users\\nguye\\AppData\\Roaming\\NuGet\\NuGet.Config"
+          "C:\\Users\\ADMIN\\AppData\\Roaming\\NuGet\\NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net8.0"
@@ -89,17 +89,17 @@
         }
       }
     },
-    "C:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj": {
+    "D:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj",
+        "projectUniqueName": "D:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj",
         "projectName": "ControlGui.Wpf",
-        "projectPath": "C:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj",
-        "packagesPath": "C:\\Users\\nguye\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Wpf\\obj\\",
+        "projectPath": "D:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Wpf\\ControlGui.Wpf.csproj",
+        "packagesPath": "C:\\Users\\ADMIN\\.nuget\\packages\\",
+        "outputPath": "D:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Wpf\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
-          "C:\\Users\\nguye\\AppData\\Roaming\\NuGet\\NuGet.Config"
+          "C:\\Users\\ADMIN\\AppData\\Roaming\\NuGet\\NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net8.0-windows"
@@ -112,8 +112,8 @@
             "framework": "net8.0-windows7.0",
             "targetAlias": "net8.0-windows",
             "projectReferences": {
-              "C:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj": {
-                "projectPath": "C:\\Users\\nguye\\OneDrive\\Desktop\\Control\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj"
+              "D:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj": {
+                "projectPath": "D:\\Project_VSCode\\Haptic_system_Core\\CONTROL_GUI_CS\\ControlGui.Core\\ControlGui.Core.csproj"
               }
             }
           }
