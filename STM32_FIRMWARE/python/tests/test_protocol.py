@@ -28,6 +28,7 @@ from tue_usb import (
     DcInfo,
     DcChannelStatus,
     DcFaults,
+    Ps2Buttons,
     TueUsbClient,
     crc8_sae_j1850,
     crc8_selftest,
@@ -410,6 +411,58 @@ class TestProtocol(unittest.TestCase):
             # Frequency config
             actual_hz = client.dc_set_frequency(20)
             self.assertEqual(actual_hz, 20000)
+
+
+    def test_12_ps2_controller_protocol(self):
+        """PS2 controller CAN 0x505/0x506 encoding, decoding and mock client."""
+        self.assertEqual(CanId.PS2_CTRL, 0x505)
+        self.assertEqual(CanId.PS2_STATE, 0x506)
+
+        # Rumble request: [small on/off, large 0..255]
+        self.assertEqual(Encoders.ps2_ctrl(True, 0x80), b"\x01\x80")
+        self.assertEqual(Encoders.ps2_ctrl(0, 0), b"\x00\x00")
+
+        ctrl = Decoders.ps2_ctrl(bytes([1, 0x73, 1, 0x80]))
+        self.assertTrue(ctrl.connected)
+        self.assertTrue(ctrl.sticks_valid)
+        self.assertEqual(ctrl.mode_name, "ANALOG")
+        self.assertEqual(ctrl.small_motor, 1)
+        self.assertEqual(ctrl.large_motor, 0x80)
+
+        # State frame: UP + CROSS held, sticks at 10/20/30/40
+        state = Decoders.ps2_state(
+            struct.pack("<HBBBBBB", 0x4010, 10, 20, 30, 40, 0x73, 0x03))
+        self.assertTrue(state.connected)
+        self.assertTrue(state.sticks_valid)
+        self.assertEqual((state.lx, state.ly, state.rx, state.ry),
+                         (10, 20, 30, 40))
+        self.assertTrue(state.pressed(Ps2Buttons.CROSS))
+        self.assertTrue(state.pressed(Ps2Buttons.UP))
+        self.assertFalse(state.pressed(Ps2Buttons.START))
+        self.assertEqual(state.button_names, ("UP", "CROSS"))
+
+        # Digital mode -> sticks are not valid
+        digital = Decoders.ps2_state(
+            struct.pack("<HBBBBBB", 0, 0x7F, 0x7F, 0x7F, 0x7F, 0x41, 0x01))
+        self.assertFalse(digital.sticks_valid)
+        self.assertEqual(digital.button_names, ())
+
+        with TueUsbClient(mock=True) as client:
+            applied = client.ps2_set_motors(True, 0xC0)
+            self.assertTrue(applied.connected)
+            self.assertEqual(applied.small_motor, 1)
+            self.assertEqual(applied.large_motor, 0xC0)
+
+            live = client.ps2_get_state()
+            self.assertTrue(live.connected)
+            self.assertTrue(live.sticks_valid)
+            for v in (live.lx, live.ly, live.rx, live.ry):
+                self.assertGreaterEqual(v, 0)
+                self.assertLessEqual(v, 255)
+
+            stopped = client.ps2_stop_motors()
+            self.assertEqual(stopped.small_motor, 0)
+            self.assertEqual(stopped.large_motor, 0)
 
 
 if __name__ == "__main__":

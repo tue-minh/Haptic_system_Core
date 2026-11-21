@@ -175,6 +175,16 @@ typedef enum {
  * Response: raw[0..7] of the last transfer. Not part of normal polling. */
 #define TUE_USB_CAN_SENSOR_ADC_RAW     0x504U
 
+/* --- PS2 wireless controller on SPI3 -------------------------------------- *
+ * 0x505 PS2_CTRL: request DLC 2 = [small motor (0/1), large motor (0..255)],
+ *                 DLC 0 = query. Response (4 B): [connected, mode, small,
+ *                 large]. The values are applied by the next 50 Hz poll.
+ * 0x506 PS2_STATE: request DLC 0. Response (8 B): [buttons u16 LE, lx, ly,
+ *                  rx, ry, mode, flags] with flags bit0 = connected,
+ *                  bit1 = analog sticks valid. */
+#define TUE_USB_CAN_PS2_CTRL           0x505U
+#define TUE_USB_CAN_PS2_STATE          0x506U
+
 /* --- Reserved for user custom communication (MUST NOT be used internally) - */
 #define TUE_USB_CAN_RESERVED_BASE    0x300U
 #define TUE_USB_CAN_RESERVED_LAST    0x3FFU
@@ -267,6 +277,8 @@ TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_ADC_CH4_META);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_SPI_CTRL);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_ADC_ALL);
 TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_SENSOR_ADC_RAW);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_PS2_CTRL);
+TUE_USB_ASSERT_NOT_RESERVED(TUE_USB_CAN_PS2_STATE);
 
 /* Decoded frame -------------------------------------------------------------*/
 typedef struct __attribute__((packed)) {

@@ -39,6 +39,8 @@ from .payloads import (
     HapticPingInfo,
     HapticUartDiag,
     PositionXYZ,
+    Ps2CtrlStatus,
+    Ps2State,
     ServoFeedback,
     ServoFeedbackDynamics,
     ServoFeedbackHealth,
@@ -115,6 +117,13 @@ class TueUsbClient:
         self._mock_adc_cs = 0
         self._mock_adc_period = 10
         self._mock_adc_total = 0
+
+        # PS2 wireless controller mock state
+        self._mock_ps2_connected = True
+        self._mock_ps2_mode = 0x73
+        self._mock_ps2_small = 0
+        self._mock_ps2_large = 0
+        self._mock_ps2_t0 = time.time()
 
     def __enter__(self) -> "TueUsbClient":
         self.connect()
@@ -488,6 +497,35 @@ class TueUsbClient:
                                   self._mock_adc_total)
             return [Frame(FrameType.RESP_OK, can_id, payload, seq)]
 
+        # 6. PS2 wireless controller (0x505 - 0x506)
+        elif can_id == CanId.PS2_CTRL:
+            if len(p) >= 2:
+                self._mock_ps2_small = 1 if p[0] else 0
+                self._mock_ps2_large = p[1]
+            payload = struct.pack("<BBBB", int(self._mock_ps2_connected),
+                                  self._mock_ps2_mode, self._mock_ps2_small,
+                                  self._mock_ps2_large)
+            return [Frame(FrameType.RESP_OK, can_id, payload, seq)]
+
+        elif can_id == CanId.PS2_STATE:
+            t = time.time() - self._mock_ps2_t0
+            lx = int(128 + 120 * math.sin(t * 1.1))
+            ly = int(128 + 120 * math.cos(t * 0.9))
+            rx = int(128 + 100 * math.sin(t * 0.6 + 1.2))
+            ry = int(128 + 100 * math.cos(t * 0.7))
+            buttons = 0
+            if int(t) % 5 == 0:
+                buttons |= 0x4000  # CROSS
+            if int(t) % 7 == 0:
+                buttons |= 0x0008  # START
+            flags = 0x01 | (0x02 if (self._mock_ps2_mode & 0xF0) == 0x70 else 0)
+            payload = struct.pack(
+                "<HBBBBBB", buttons,
+                max(0, min(255, lx)), max(0, min(255, ly)),
+                max(0, min(255, rx)), max(0, min(255, ry)),
+                self._mock_ps2_mode, flags)
+            return [Frame(FrameType.RESP_OK, can_id, payload, seq)]
+
         return [Frame(FrameType.RESP_ERR, can_id, bytes([ErrorCode.ERR_UNKNOWN_CAN_ID]), seq)]
 
     # ==========================================================================
@@ -727,6 +765,39 @@ class TueUsbClient:
             timeout=timeout,
         )
         return Decoders.sensor_spi_ctrl(resp.payload)
+
+    # ==========================================================================
+    # PS2 wireless controller (0x505 - 0x506)
+    # ==========================================================================
+
+    def ps2_set_motors(self, small_motor: Union[bool, int] = 0,
+                       large_motor: int = 0,
+                       timeout: Optional[float] = None) -> Ps2CtrlStatus:
+        """Drive the controller's vibration motors (CAN 0x505).
+
+        ``small_motor`` is on/off; ``large_motor`` is 0..255 intensity. The
+        values are applied by the firmware on its next 50 Hz poll.
+        """
+        resp = self.transact(
+            CanId.PS2_CTRL,
+            Encoders.ps2_ctrl(small_motor, large_motor),
+            timeout=timeout,
+        )
+        return Decoders.ps2_ctrl(resp.payload)
+
+    def ps2_get_ctrl(self, timeout: Optional[float] = None) -> Ps2CtrlStatus:
+        """Query the link state and the applied motor values (CAN 0x505)."""
+        resp = self.transact(CanId.PS2_CTRL, timeout=timeout)
+        return Decoders.ps2_ctrl(resp.payload)
+
+    def ps2_get_state(self, timeout: Optional[float] = None) -> Ps2State:
+        """Read buttons and analog sticks from the controller (CAN 0x506)."""
+        resp = self.transact(CanId.PS2_STATE, timeout=timeout)
+        return Decoders.ps2_state(resp.payload)
+
+    def ps2_stop_motors(self, timeout: Optional[float] = None) -> Ps2CtrlStatus:
+        """Turn both vibration motors off."""
+        return self.ps2_set_motors(False, 0, timeout=timeout)
 
     def get_spi_adc_status(self, timeout: Optional[float] = None) -> SpiAdcCtrlStatus:
         """Query the current SPI ADC polling configuration (CAN 0x502)."""

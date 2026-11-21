@@ -137,6 +137,10 @@ class CanId(IntEnum):
     SENSOR_ADC_ALL = 0x503
     SENSOR_ADC_RAW = 0x504
 
+    # --- PS2 wireless controller on SPI3 (0x505 - 0x506) ---
+    PS2_CTRL = 0x505
+    PS2_STATE = 0x506
+
     # --- User custom range (host streams, firmware forwards to UART slave) ---
     HAPTIC_TELEMETRY = 0x300
     HAPTIC_PING = 0x301
@@ -184,6 +188,34 @@ class DcMode(IntEnum):
     FORWARD = 1  # Forward rotation (IN1=PWM, IN2=0)
     REVERSE = 2  # Reverse rotation (IN1=0, IN2=PWM)
     BRAKE = 3    # Active brake (IN1=1, IN2=1)
+
+
+class Ps2Buttons(IntFlag):
+    """PS2 controller buttons (active-HIGH bitmask, 1 = pressed)."""
+    SELECT = 1 << 0
+    L3 = 1 << 1
+    R3 = 1 << 2
+    START = 1 << 3
+    UP = 1 << 4
+    RIGHT = 1 << 5
+    DOWN = 1 << 6
+    LEFT = 1 << 7
+    L2 = 1 << 8
+    R2 = 1 << 9
+    L1 = 1 << 10
+    R1 = 1 << 11
+    TRIANGLE = 1 << 12
+    CIRCLE = 1 << 13
+    CROSS = 1 << 14
+    SQUARE = 1 << 15
+
+
+class Ps2Mode(IntEnum):
+    """PS2 device mode byte reported by the receiver (rx[1])."""
+    DIGITAL = 0x41
+    ANALOG = 0x73
+    ANALOG_PRESSURE = 0x79
+    CONFIG = 0xF3
 
 
 def is_reserved_can_id(can_id: int) -> bool:

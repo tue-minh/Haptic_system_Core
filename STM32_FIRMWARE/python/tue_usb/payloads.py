@@ -5,13 +5,23 @@ Provides high-level data models and pack/unpack functions for:
   - System Management (0x100 - 0x107)
   - Stepper Kinematics & Raw Channels (0x200 - 0x281)
   - STS3215 Serial Bus Servos (0x400 - 0x415)
+  - PS2 wireless controller (0x505 - 0x506)
 """
 
 import struct
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
-from .defs import CanId, LedState, ServoMode, ServoTorque, ServoAlarmBit, DcMode
+from .defs import (
+    CanId,
+    DcMode,
+    LedState,
+    Ps2Buttons,
+    Ps2Mode,
+    ServoAlarmBit,
+    ServoMode,
+    ServoTorque,
+)
 
 
 # ==============================================================================
@@ -354,6 +364,76 @@ class SpiAdcCtrlStatus:
 
 
 # ==============================================================================
+# PS2 Wireless Controller Data Models (0x505 - 0x506)
+# ==============================================================================
+
+def _ps2_mode_name(mode: int) -> str:
+    try:
+        return Ps2Mode(mode).name
+    except ValueError:
+        return f"0x{mode:02X}"
+
+
+@dataclass
+class Ps2CtrlStatus:
+    """Rumble motor state reported by CAN 0x505."""
+    connected: bool
+    mode: int
+    small_motor: int
+    large_motor: int
+
+    @property
+    def mode_name(self) -> str:
+        return _ps2_mode_name(self.mode)
+
+    @property
+    def sticks_valid(self) -> bool:
+        return (self.mode & 0xF0) == 0x70
+
+    def __str__(self) -> str:
+        return (
+            f"Ps2Ctrl(connected={int(self.connected)}, mode=0x{self.mode:02X} "
+            f"({self.mode_name}), small={self.small_motor}, large={self.large_motor})"
+        )
+
+
+@dataclass
+class Ps2State:
+    """Buttons and analog sticks reported by CAN 0x506."""
+    connected: bool
+    mode: int
+    buttons: int
+    lx: int
+    ly: int
+    rx: int
+    ry: int
+
+    @property
+    def mode_name(self) -> str:
+        return _ps2_mode_name(self.mode)
+
+    @property
+    def sticks_valid(self) -> bool:
+        return (self.mode & 0xF0) == 0x70
+
+    @property
+    def button_names(self) -> Tuple[str, ...]:
+        """Names of the currently pressed buttons (empty when none)."""
+        return tuple(btn.name for btn in Ps2Buttons if btn & self.buttons)
+
+    def pressed(self, mask: Union[Ps2Buttons, int]) -> bool:
+        return bool(self.buttons & int(mask))
+
+    def __str__(self) -> str:
+        pressed = ", ".join(self.button_names) or "none"
+        return (
+            f"Ps2State(connected={int(self.connected)}, mode=0x{self.mode:02X}, "
+            f"buttons=0x{self.buttons:04X} [{pressed}], "
+            f"LX={self.lx} LY={self.ly} RX={self.rx} RY={self.ry})"
+        )
+
+
+# ==============================================================================
 # DC Motor Data Models (0x600 - 0x607)
 # ==============================================================================
 
@@ -625,6 +705,14 @@ class Encoders:
             int(cs_idx) & 0xFF,
             int(period_ms) & 0xFF,
         )
+
+    # --- PS2 wireless controller (0x505 - 0x506) ---
+    @staticmethod
+    def ps2_ctrl(small_motor: Union[bool, int] = 0,
+                 large_motor: int = 0) -> bytes:
+        """Rumble command: small motor on/off, large motor 0..255."""
+        small = 1 if small_motor else 0
+        return struct.pack("<BB", small, int(large_motor) & 0xFF)
 
 
 # ==============================================================================
@@ -934,6 +1022,34 @@ class Decoders:
             cs_idx=cs_idx,
             period_ms=period_ms,
             total_frames=total,
+        )
+
+    # --- PS2 wireless controller (0x505 - 0x506) ---
+    @staticmethod
+    def ps2_ctrl(payload: bytes) -> Ps2CtrlStatus:
+        if len(payload) < 4:
+            raise ValueError("PS2_CTRL payload must be 4 bytes")
+        connected, mode, small, large = struct.unpack("<BBBB", payload[:4])
+        return Ps2CtrlStatus(
+            connected=bool(connected),
+            mode=mode,
+            small_motor=small,
+            large_motor=large,
+        )
+
+    @staticmethod
+    def ps2_state(payload: bytes) -> Ps2State:
+        if len(payload) < 8:
+            raise ValueError("PS2_STATE payload must be 8 bytes")
+        buttons, lx, ly, rx, ry, mode, flags = struct.unpack("<HBBBBBB", payload[:8])
+        return Ps2State(
+            connected=bool(flags & 0x01),
+            mode=mode,
+            buttons=buttons,
+            lx=lx,
+            ly=ly,
+            rx=rx,
+            ry=ry,
         )
 
     # --- DC Motors / DRV8872 (0x600 - 0x607) ---

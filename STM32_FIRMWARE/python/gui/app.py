@@ -26,7 +26,7 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
@@ -113,6 +113,8 @@ class TueUsbApp(QMainWindow):
         self.tabs.addTab(self._build_servo_tab(), "Servo (STS3215)")
         self.tabs.addTab(self._build_dc_tab(), "DC Motors (DRV8872)")
         self.tabs.addTab(self._build_adc_tab(), "ADC (SPI slave)")
+        self._ps2_tab = self._build_ps2_tab()
+        self.tabs.addTab(self._ps2_tab, "PS2 (SPI3)")
         root.addWidget(self.tabs)
 
         self.status = QStatusBar()
@@ -512,31 +514,23 @@ class TueUsbApp(QMainWindow):
         pg.addWidget(QLabel("Slave index:"), 0, 0)
         self.cmb_adc_slave = QComboBox()
         self.cmb_adc_slave.addItem("Active (0x502 config)", None)
-        for idx in range(6):
-            bus = "SPI1" if idx < 3 else "SPI3"
-            cs = idx % 3 + 1
-            self.cmb_adc_slave.addItem(f"{idx} - {bus} CS{cs}", idx)
+        for idx in range(3):
+            self.cmb_adc_slave.addItem(f"{idx} - SPI1 CS{idx + 1}", idx)
         pg.addWidget(self.cmb_adc_slave, 0, 1)
 
         self.chk_adc_enable = QCheckBox("Polling enabled")
         self.chk_adc_enable.setChecked(True)
         pg.addWidget(self.chk_adc_enable, 0, 2)
 
-        pg.addWidget(QLabel("Bus:"), 1, 0)
-        self.cmb_adc_bus = QComboBox()
-        self.cmb_adc_bus.addItem("SPI1", 1)
-        self.cmb_adc_bus.addItem("SPI3", 3)
-        pg.addWidget(self.cmb_adc_bus, 1, 1)
-
-        pg.addWidget(QLabel("Chip select:"), 1, 2)
+        pg.addWidget(QLabel("Chip select:"), 1, 0)
         self.cmb_adc_cs = QComboBox()
         for idx in range(3):
             self.cmb_adc_cs.addItem(f"CS{idx + 1}", idx)
-        pg.addWidget(self.cmb_adc_cs, 1, 3)
+        pg.addWidget(self.cmb_adc_cs, 1, 1)
 
-        pg.addWidget(QLabel("Period (ms):"), 1, 4)
+        pg.addWidget(QLabel("Period (ms):"), 1, 2)
         self.spn_adc_period = self._spin(1, 255, 10, 80)
-        pg.addWidget(self.spn_adc_period, 1, 5)
+        pg.addWidget(self.spn_adc_period, 1, 3)
 
         cbox, cg = self._grid_box("Commands")
         r = 0
@@ -556,6 +550,64 @@ class TueUsbApp(QMainWindow):
 
         fbox, self.log_adc = self._feedback_box("ADC Feedback")
         return self._assemble_tab([pbox, cbox], fbox)
+
+    # ==================================================================
+    # Tab: PS2 wireless controller (0x505-0x506)
+    # ==================================================================
+
+    def _build_ps2_tab(self) -> QWidget:
+        pbox, pg = self._grid_box("Rumble motors (applied on the next 50 Hz poll)")
+        pg.addWidget(QLabel("Small motor:"), 0, 0)
+        self.chk_ps2_small = QCheckBox("Vibrate")
+        pg.addWidget(self.chk_ps2_small, 0, 1)
+
+        pg.addWidget(QLabel("Large motor (0..255):"), 0, 2)
+        self.spn_ps2_large = self._spin(0, 255, 0, 90)
+        pg.addWidget(self.spn_ps2_large, 0, 3)
+
+        pg.addWidget(QLabel("Live view:"), 1, 0)
+        self.chk_ps2_live = QCheckBox("Read 0x506 at 10 Hz")
+        self.chk_ps2_live.setChecked(True)
+        pg.addWidget(self.chk_ps2_live, 1, 1)
+
+        sbox, sg = self._grid_box("Controller state (0x506)")
+        self.lbl_ps2_link = QLabel("not polled yet")
+        sg.addWidget(self.lbl_ps2_link, 0, 0, 1, 8)
+
+        for col, (name, attr) in enumerate((
+            ("LX", "lbl_ps2_lx"), ("LY", "lbl_ps2_ly"),
+            ("RX", "lbl_ps2_rx"), ("RY", "lbl_ps2_ry"),
+        )):
+            sg.addWidget(QLabel(name), 1, col * 2)
+            lab = QLabel("---")
+            lab.setFont(QFont("Consolas", 10))
+            setattr(self, attr, lab)
+            sg.addWidget(lab, 1, col * 2 + 1)
+
+        sg.addWidget(QLabel("Buttons:"), 2, 0)
+        self.lbl_ps2_buttons = QLabel("—")
+        self.lbl_ps2_buttons.setWordWrap(True)
+        sg.addWidget(self.lbl_ps2_buttons, 2, 1, 1, 7)
+
+        cbox, cg = self._grid_box("Commands")
+        r = 0
+        self._cmd_row(cg, r, "0x505 PS2_CTRL", [
+            ("Apply motors", self._do_ps2_ctrl),
+            ("Query", self._do_ps2_ctrl_query),
+        ]); r += 1
+        self._cmd_row(cg, r, "0x506 PS2_STATE",
+                      [("Read state", self._do_ps2_state)]); r += 1
+        cg.setColumnStretch(3, 1)
+
+        fbox, self.log_ps2 = self._feedback_box("PS2 Feedback")
+
+        self._ps2_busy = False
+        self._ps2_timer = QTimer(self)
+        self._ps2_timer.setInterval(100)
+        self._ps2_timer.timeout.connect(self._ps2_tick)
+        self._ps2_timer.start()
+
+        return self._assemble_tab([pbox, sbox, cbox], fbox)
 
     # ==================================================================
     # Connection handling
@@ -1071,7 +1123,7 @@ class TueUsbApp(QMainWindow):
 
     def _do_adc_ctrl_apply(self):
         enable = self.chk_adc_enable.isChecked()
-        bus = self.cmb_adc_bus.currentData()
+        bus = 1  # ADC slave is on SPI1 only; SPI3 is reserved for the PS2 link
         cs = self.cmb_adc_cs.currentData()
         period = self.spn_adc_period.value()
         self._run(
@@ -1104,10 +1156,98 @@ class TueUsbApp(QMainWindow):
             fmt,
         )
 
+    # ==================================================================
+    # PS2 controller handlers
+    # ==================================================================
 
-def run_app() -> int:
+    def _do_ps2_ctrl(self):
+        small = 1 if self.chk_ps2_small.isChecked() else 0
+        large = self.spn_ps2_large.value()
+        self._run(
+            self.log_ps2,
+            f"0x505 PS2_CTRL(small={small}, large={large})",
+            lambda: self.client.ps2_set_motors(small, large),
+        )
+
+    def _do_ps2_ctrl_query(self):
+        self._run(self.log_ps2, "0x505 PS2_CTRL(QUERY)",
+                  self.client.ps2_get_ctrl)
+
+    def _do_ps2_state(self):
+        self._run(self.log_ps2, "0x506 PS2_STATE",
+                  self.client.ps2_get_state, self._format_ps2_state)
+
+    @staticmethod
+    def _format_ps2_state(st) -> str:
+        if not st.connected:
+            return "not connected (receiver silent)"
+        return (
+            f"mode 0x{st.mode:02X} ({st.mode_name}), "
+            f"buttons 0x{st.buttons:04X} [{', '.join(st.button_names) or 'none'}], "
+            f"LX={st.lx} LY={st.ly} RX={st.rx} RY={st.ry}"
+        )
+
+    def _ps2_tick(self):
+        if not self.chk_ps2_live.isChecked() or self._ps2_busy:
+            return
+        if self.tabs.currentWidget() is not self._ps2_tab:
+            return
+        if not self.client.is_connected():
+            return
+
+        self._ps2_busy = True
+        worker = AsyncWorker(self.client.ps2_get_state)
+
+        def done():
+            self._ps2_busy = False
+            if worker in self._workers:
+                self._workers.remove(worker)
+
+        worker.result_ready.connect(self._on_ps2_state)
+        worker.finished.connect(done)
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_ps2_state(self, st):
+        if not st.connected:
+            self.lbl_ps2_link.setText("not connected")
+            for lab in (self.lbl_ps2_lx, self.lbl_ps2_ly,
+                        self.lbl_ps2_rx, self.lbl_ps2_ry):
+                lab.setText("---")
+            self.lbl_ps2_buttons.setText("—")
+            return
+
+        self.lbl_ps2_link.setText(
+            f"connected · mode 0x{st.mode:02X} ({st.mode_name}) · "
+            f"{'analog sticks' if st.sticks_valid else 'digital only'}")
+        self.lbl_ps2_lx.setText(f"{st.lx:3d}")
+        self.lbl_ps2_ly.setText(f"{st.ly:3d}")
+        self.lbl_ps2_rx.setText(f"{st.rx:3d}")
+        self.lbl_ps2_ry.setText(f"{st.ry:3d}")
+        self.lbl_ps2_buttons.setText(", ".join(st.button_names) or "—")
+
+
+def run_app(mock: bool = False, initial_tab: Optional[str] = None) -> int:
+    """Open the control window.
+
+    mock        connect straight away in mock mode (no hardware required).
+    initial_tab select the first tab whose title contains this text, e.g.
+                "ps2", "adc", "servo".
+    """
     app = QApplication.instance() or QApplication(sys.argv)
     window = TueUsbApp()
+
+    if mock:
+        window.chk_mock.setChecked(True)
+        window._toggle_connection()
+
+    if initial_tab:
+        needle = initial_tab.lower()
+        for idx in range(window.tabs.count()):
+            if needle in window.tabs.tabText(idx).lower():
+                window.tabs.setCurrentIndex(idx)
+                break
+
     window.show()
     return app.exec()
 

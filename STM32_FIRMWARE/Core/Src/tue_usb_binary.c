@@ -29,6 +29,7 @@
 #include "tue_stepper.h"
 #include "tue_haptic_bridge.h"
 #include "tue_spi_adc.h"
+#include "tue_ps2.h"
 #include "usbd_cdc_if.h"
 #include "usbd_cdc.h"
 
@@ -109,6 +110,7 @@ static int      servo_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_d
 static int      dc_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
 static int      haptic_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
 static int      spi_adc_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
+static int      ps2_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc);
 
 static tue_usb_error_t servo_map_err(tue_sts3215_status_t st);
 static tue_usb_error_t step_map_err(tue_stepper_status_t st);
@@ -501,8 +503,12 @@ static void usb_dispatch(const tue_usb_frame_t *f, const uint8_t *raw,
         err = haptic_cmd(f, out, &out_dlc);
     } else if ((f->can_id >= TUE_USB_CAN_SENSOR_ADC_CH0_3) &&
                (f->can_id <= TUE_USB_CAN_SENSOR_ADC_RAW)) {
-        /* Cached ITV valve ADC feedback acquired over SPI1/SPI3. */
+        /* Cached ITV valve ADC feedback acquired over SPI1 (SPI3 is PS2-only). */
         err = spi_adc_cmd(f, out, &out_dlc);
+    } else if ((f->can_id >= TUE_USB_CAN_PS2_CTRL) &&
+               (f->can_id <= TUE_USB_CAN_PS2_STATE)) {
+        /* PS2 wireless controller: rumble control and live state feedback. */
+        err = ps2_cmd(f, out, &out_dlc);
     } else if (TUE_USB_CAN_ID_IS_RESERVED(f->can_id)) {
         err = (int)TUE_USB_ERR_NOT_SUPPORTED;
     } else {
@@ -655,6 +661,59 @@ static int spi_adc_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc)
         out[2] = cs_idx;
         out[3] = period_ms;
         wr_u32(&out[4], total);
+        *out_dlc = 8U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    default:
+        return (int)TUE_USB_ERR_UNKNOWN_CAN_ID;
+    }
+}
+
+/* ========================================================================== */
+/* PS2 wireless controller (0x505 - 0x506)                                    */
+/* ========================================================================== */
+
+static int ps2_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc)
+{
+    switch (f->can_id) {
+
+    case TUE_USB_CAN_PS2_CTRL: {
+        if (f->dlc == 0U) {
+            /* query only */
+        } else if (f->dlc == 2U) {
+            tue_ps2_set_motors(f->payload[0], f->payload[1]);
+        } else {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+
+        tue_ps2_state_t st;
+        uint8_t small, large;
+        tue_ps2_get_state(&st);
+        tue_ps2_get_motors(&small, &large);
+        out[0] = st.connected ? 1U : 0U;
+        out[1] = st.mode;
+        out[2] = small;
+        out[3] = large;
+        *out_dlc = 4U;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    case TUE_USB_CAN_PS2_STATE: {
+        if (f->dlc != 0U) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+
+        tue_ps2_state_t st;
+        tue_ps2_get_state(&st);
+        wr_u16(&out[0], st.buttons);
+        out[2] = st.lx;
+        out[3] = st.ly;
+        out[4] = st.rx;
+        out[5] = st.ry;
+        out[6] = st.mode;
+        out[7] = (uint8_t)((st.connected ? 0x01U : 0x00U) |
+                           (((st.mode & 0xF0U) == 0x70U) ? 0x02U : 0x00U));
         *out_dlc = 8U;
         return (int)TUE_USB_ERR_OK;
     }
@@ -1405,6 +1464,9 @@ void tue_usb_init(void)
 
     /* SPI ADC feedback link: background poll of the STM32F103 slave. */
     (void)tue_spi_adc_init();
+
+    /* PS2 wireless controller on SPI3: 50 Hz poll + rumble control. */
+    tue_ps2_init();
 
     const osSemaphoreAttr_t sem_attr = { .name = "usb_rx" };
     s_rx_sem = osSemaphoreNew(1U, 0U, &sem_attr);
