@@ -14,9 +14,14 @@
   * completion callback, so it needs the CS-high gap between frames to reload -
   * see TUE_SPI_ADC_BURST_FRAMES.
   *
-  * Six logical slaves are mapped onto the two SPI buses:
-  *   0..2 -> SPI1 (PB3/PB4/PB5), CS1 PB8, CS2 PB9, CS3 PE0
-  *   3..5 -> SPI3 (PC10/PC11/PC12), CS1 PD4, CS2 PD3, CS3 PD2
+  * Three logical slaves, all on SPI1 (PB3/PB4/PB5):
+  *   0 -> CS1 PB8, 1 -> CS2 PB9, 2 -> CS3 PE0
+  *
+  * SPI3 (PC10/PC11/PC12, CS PD4/PD3/PD2) is deliberately NOT used here: it is
+  * reserved for the PS2 wireless receiver on its own SPI mode (CPOL=1,
+  * CPHA=2Edge, LSB, ~164-328 kHz), which is incompatible with the F103 ADC
+  * slave (CPOL=0, CPHA=1Edge, MSB, 2.625 MHz). Sharing the peripheral would
+  * require re-initialising it per transfer and would break both devices.
   *
   ******************************************************************************
   */
@@ -38,7 +43,7 @@ extern "C" {
  */
 #define TUE_SPI_ADC_BURST_FRAMES      1U
 #define TUE_SPI_ADC_BURST_LEN         (TUE_SPI_ADC_FRAME_LEN * TUE_SPI_ADC_BURST_FRAMES)
-#define TUE_SPI_ADC_SLAVE_COUNT       6U
+#define TUE_SPI_ADC_SLAVE_COUNT       3U
 #define TUE_SPI_ADC_CHANNEL_COUNT     5U
 #define TUE_SPI_ADC_SOF0              0xAAU
 #define TUE_SPI_ADC_SOF1              0x55U

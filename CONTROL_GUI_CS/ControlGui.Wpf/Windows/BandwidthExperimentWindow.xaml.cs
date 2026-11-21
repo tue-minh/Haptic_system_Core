@@ -339,7 +339,7 @@ namespace ControlGui.Wpf.Windows
                 return false;
             }
 
-            byte busId = Convert.ToByte(((ComboBoxItem)CboSpiBus.SelectedItem).Tag);
+            // The ADC slave is on SPI1 only; SPI3 is reserved for the PS2 link.
             byte csIdx = Convert.ToByte(((ComboBoxItem)CboSpiCs.SelectedItem).Tag);
 
             string dbPath = TxtDbPath.Text.Trim();
@@ -366,7 +366,7 @@ namespace ControlGui.Wpf.Windows
                 CyclesPerFreq = cycles,
                 SettleCycles = settle,
                 SampleRateHz = rateHz,
-                SpiBusId = busId,
+                SpiBusId = 1,
                 SpiCsIdx = csIdx,
                 SpiPeriodMs = spiPeriod,
                 VrefMv = vref,

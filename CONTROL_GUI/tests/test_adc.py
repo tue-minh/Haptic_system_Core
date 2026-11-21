@@ -88,11 +88,10 @@ class AdcPanelTests(unittest.TestCase):
         fired = []
         panel.apply_requested.connect(lambda *a: fired.append(a))
         panel.chk_enable.setChecked(False)
-        panel.cbo_bus.setCurrentIndex(panel.cbo_bus.findData(3))
         panel.cbo_cs.setCurrentIndex(panel.cbo_cs.findData(1))
         panel.cbo_period.setCurrentIndex(panel.cbo_period.findData(20))
         panel.btn_apply.click()
-        self.assertEqual(fired, [(False, 3, 1, 20)])
+        self.assertEqual(fired, [(False, 1, 1, 20)])
 
     def test_unavailable_panel_clears(self):
         from unified_gui.panels.adc import AdcPanel
@@ -168,12 +167,12 @@ class MotorWorkerAdcTests(unittest.TestCase):
             self.assertEqual(tuple(snap.adc_channels), (10, 20, 30, 40, 50))
             self.assertEqual(snap.adc_seq, 3)
 
-            worker.configure_spi_adc(True, 3, 1, 20)
+            worker.configure_spi_adc(True, 1, 1, 20)
             self.assertTrue(wait_for(
-                lambda: worker.snapshot().adc_bus_id == 3
+                lambda: worker.snapshot().adc_bus_id == 1
                 and worker.snapshot().adc_cs_idx == 1
                 and worker.snapshot().adc_period_ms == 20))
-            self.assertIn(("configure_spi_adc", True, 3, 1, 20), client.calls)
+            self.assertIn(("configure_spi_adc", True, 1, 1, 20), client.calls)
 
             worker.read_spi_adc()
             self.assertTrue(wait_for(

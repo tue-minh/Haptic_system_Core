@@ -19,17 +19,12 @@ typedef struct {
     SPI_HandleTypeDef *spi;
     GPIO_TypeDef      *cs_port;
     uint16_t           cs_pin;
-    uint8_t            bus_id;
-    uint8_t            cs_idx;
 } tue_spi_adc_slave_desc_t;
 
 static const tue_spi_adc_slave_desc_t s_slaves[TUE_SPI_ADC_SLAVE_COUNT] = {
-    { &hspi1, SPI1_CS1_GPIO_Port, SPI1_CS1_Pin, 1U, 0U },
-    { &hspi1, SPI1_CS2_GPIO_Port, SPI1_CS2_Pin, 1U, 1U },
-    { &hspi1, SPI1_CS3_GPIO_Port, SPI1_CS3_Pin, 1U, 2U },
-    { &hspi3, SPI3_CS1_GPIO_Port, SPI3_CS1_Pin, 3U, 0U },
-    { &hspi3, SPI3_CS2_GPIO_Port, SPI3_CS2_Pin, 3U, 1U },
-    { &hspi3, SPI3_CS3_GPIO_Port, SPI3_CS3_Pin, 3U, 2U },
+    { &hspi1, SPI1_CS1_GPIO_Port, SPI1_CS1_Pin },
+    { &hspi1, SPI1_CS2_GPIO_Port, SPI1_CS2_Pin },
+    { &hspi1, SPI1_CS3_GPIO_Port, SPI1_CS3_Pin },
 };
 
 static tue_spi_adc_snapshot_t s_cache[TUE_SPI_ADC_SLAVE_COUNT];
@@ -40,10 +35,8 @@ static uint8_t s_rx_burst[TUE_SPI_ADC_BURST_LEN];
 static bool               s_initialized  = false;
 static osThreadId_t       s_task         = NULL;
 static volatile uint8_t   s_enabled      = 1U;
-static volatile uint8_t   s_bus_id       = 1U;
 static volatile uint8_t   s_cs_idx       = 0U;
 static volatile uint8_t   s_period_ms    = TUE_SPI_ADC_DEFAULT_PERIOD_MS;
-static volatile uint8_t   s_active_idx   = 0U;
 static volatile uint32_t  s_total_frames = 0U;
 
 static uint16_t rd_u16(const uint8_t *p)
@@ -153,7 +146,7 @@ static void tue_spi_adc_task(void *argument)
     (void)argument;
 
     for (;;) {
-        uint8_t idx = s_active_idx;
+        uint8_t idx = s_cs_idx;
         uint8_t period = s_period_ms;
 
         if ((s_enabled != 0U) && (idx < TUE_SPI_ADC_SLAVE_COUNT)) {
@@ -179,10 +172,8 @@ bool tue_spi_adc_init(void)
     memset(s_cache, 0, sizeof(s_cache));
 
     s_enabled    = 1U;
-    s_bus_id     = 1U;
     s_cs_idx     = 0U;
     s_period_ms  = TUE_SPI_ADC_DEFAULT_PERIOD_MS;
-    s_active_idx = 0U;
 
     const osThreadAttr_t task_attr = {
         .name = "tue_spi_adc",
@@ -196,7 +187,7 @@ bool tue_spi_adc_init(void)
 
 uint8_t tue_spi_adc_active_index(void)
 {
-    return s_active_idx;
+    return s_cs_idx;
 }
 
 bool tue_spi_adc_valid_index(uint8_t logical_idx)
@@ -223,7 +214,9 @@ void tue_spi_adc_get_snapshot(uint8_t logical_idx, tue_spi_adc_snapshot_t *out)
 bool tue_spi_adc_configure(bool enable, uint8_t bus_id, uint8_t cs_idx,
                            uint8_t period_ms)
 {
-    if ((bus_id != 1U) && (bus_id != 3U)) {
+    /* SPI1 only. bus_id is kept in the wire protocol for compatibility, but
+     * SPI3 belongs to the PS2 receiver and must never be polled as an ADC. */
+    if (bus_id != 1U) {
         return false;
     }
     if (cs_idx > 2U) {
@@ -234,10 +227,8 @@ bool tue_spi_adc_configure(bool enable, uint8_t bus_id, uint8_t cs_idx,
     }
 
     s_enabled    = enable ? 1U : 0U;
-    s_bus_id     = bus_id;
     s_cs_idx     = cs_idx;
     s_period_ms  = period_ms;
-    s_active_idx = (bus_id == 1U) ? cs_idx : (uint8_t)(3U + cs_idx);
     return true;
 }
 
@@ -248,7 +239,7 @@ void tue_spi_adc_get_config(bool *enable, uint8_t *bus_id, uint8_t *cs_idx,
         *enable = (s_enabled != 0U);
     }
     if (bus_id != NULL) {
-        *bus_id = s_bus_id;
+        *bus_id = 1U;
     }
     if (cs_idx != NULL) {
         *cs_idx = s_cs_idx;

@@ -158,12 +158,8 @@
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Sample Rate (Hz):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
                         <TextBox x:Name="TxtRateHz" Grid.Row="0" Grid.Column="1" Text="100" Margin="0,4" FontWeight="Normal"/>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="SPI Bus / CS:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="SPI1 CS:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,4"/>
                         <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,4">
-                            <ComboBox x:Name="CboSpiBus" Width="90" Margin="0,0,6,0" FontWeight="Normal">
-                                <ComboBoxItem Content="SPI1" Tag="1" IsSelected="True"/>
-                                <ComboBoxItem Content="SPI3" Tag="3"/>
-                            </ComboBox>
                             <ComboBox x:Name="CboSpiCs" Width="90" FontWeight="Normal">
                                 <ComboBoxItem Content="CS1 (0)" Tag="0" IsSelected="True"/>
                                 <ComboBoxItem Content="CS2 (1)" Tag="1"/>

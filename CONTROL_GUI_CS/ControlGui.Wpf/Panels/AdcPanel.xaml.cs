@@ -22,8 +22,6 @@ namespace ControlGui.Wpf.Panels
             _mv = new[] { TxtMv0, TxtMv1, TxtMv2, TxtMv3, TxtMv4 };
             _bars = new[] { Bar0, Bar1, Bar2, Bar3, Bar4 };
 
-            CmbBus.ItemsSource = new[] { "SPI1", "SPI3" };
-            CmbBus.SelectedIndex = 0;
             CmbCs.ItemsSource = new[] { "CS1", "CS2", "CS3" };
             CmbCs.SelectedIndex = 0;
             CmbPeriod.ItemsSource = new[] { "10 ms", "20 ms", "50 ms", "100 ms" };
@@ -77,7 +75,6 @@ namespace ControlGui.Wpf.Panels
 
         private void SeedConfig(MotorSnapshot snap)
         {
-            CmbBus.SelectedIndex = snap.AdcBusId == 3 ? 1 : 0;
             CmbCs.SelectedIndex = Math.Clamp((int)snap.AdcCsIdx, 0, 2);
             CmbPeriod.SelectedIndex = snap.AdcPeriodMs switch
             {
@@ -115,7 +112,7 @@ namespace ControlGui.Wpf.Panels
         private void OnApplyClick(object sender, System.Windows.RoutedEventArgs e)
         {
             bool enable = ChkEnable.IsChecked == true;
-            byte bus = (byte)(CmbBus.SelectedIndex == 1 ? 3 : 1);
+            const byte bus = 1;   // ADC slave is on SPI1 only; SPI3 is PS2-only
             byte cs = (byte)Math.Clamp(CmbCs.SelectedIndex, 0, 2);
             byte[] periods = { 10, 20, 50, 100 };
             byte period = periods[Math.Clamp(CmbPeriod.SelectedIndex, 0, periods.Length - 1)];

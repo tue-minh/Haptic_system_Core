@@ -281,14 +281,14 @@ namespace ControlGui.Tests
             using var client = new TueUsbClient(mock: true);
             client.Connect();
 
-            var cfg = client.ConfigureSpiAdc(false, 3, 2, 20);
+            var cfg = client.ConfigureSpiAdc(false, 1, 2, 20);
             Assert.IsFalse(cfg.Enabled);
-            Assert.AreEqual((byte)3, cfg.BusId);
+            Assert.AreEqual((byte)1, cfg.BusId);
             Assert.AreEqual((byte)2, cfg.CsIdx);
             Assert.AreEqual((byte)20, cfg.PeriodMs);
 
             var again = client.GetSpiAdcStatus();
-            Assert.AreEqual((byte)3, again.BusId);
+            Assert.AreEqual((byte)1, again.BusId);
             Assert.AreEqual((byte)2, again.CsIdx);
         }
 
@@ -310,10 +310,10 @@ namespace ControlGui.Tests
             Assert.IsTrue(snap.AdcUpdated);
             Assert.AreEqual(5, snap.AdcChannels.Length);
 
-            worker.ConfigureSpiAdc(true, 3, 1, 20);
+            worker.ConfigureSpiAdc(true, 1, 1, 20);
             Thread.Sleep(80);
             snap = worker.Snapshot();
-            Assert.AreEqual((byte)3, snap.AdcBusId);
+            Assert.AreEqual((byte)1, snap.AdcBusId);
             Assert.AreEqual((byte)1, snap.AdcCsIdx);
             Assert.AreEqual((byte)20, snap.AdcPeriodMs);
 

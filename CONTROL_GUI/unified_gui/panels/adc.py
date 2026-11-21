@@ -4,6 +4,9 @@ The master board polls the STM32F103 ADC slave in the background (CAN
 0x500-0x503) and caches the five 12-bit channels; this panel displays the
 snapshot the motor worker already fetches and lets the user change the
 master's polling slot/rate via CAN 0x502.
+
+The ADC slave is wired to SPI1 only. SPI3 is reserved for the PS2 wireless
+receiver, so it is not offered here (the master now rejects bus 3 outright).
 """
 from __future__ import annotations
 
@@ -23,6 +26,7 @@ CHANNELS = (
     ("CH4", "PA4"),
 )
 PERIOD_CHOICES = (10, 20, 50, 100)
+ADC_BUS_ID = 1
 VREF_MV = 3300.0
 ADC_MAX = 4095
 
@@ -93,13 +97,6 @@ class AdcPanel(QtWidgets.QGroupBox):
         self.chk_enable.setChecked(True)
         self.chk_enable.setToolTip("Enable the master's background SPI ADC polling")
         controls.addWidget(self.chk_enable)
-
-        controls.addWidget(QtWidgets.QLabel("Bus"))
-        self.cbo_bus = QtWidgets.QComboBox()
-        self.cbo_bus.addItem("SPI1", 1)
-        self.cbo_bus.addItem("SPI3", 3)
-        self.cbo_bus.setFixedWidth(64)
-        controls.addWidget(self.cbo_bus)
 
         controls.addWidget(QtWidgets.QLabel("CS"))
         self.cbo_cs = QtWidgets.QComboBox()
@@ -183,16 +180,16 @@ class AdcPanel(QtWidgets.QGroupBox):
             self._seed_config(snap)
 
     def _seed_config(self, snap) -> None:
-        _select_data(self.cbo_bus, int(snap.adc_bus_id), "SPI{}")
         _select_data(self.cbo_cs, int(snap.adc_cs_idx), "CS{}")
         _select_data(self.cbo_period, int(snap.adc_period_ms), "{} ms")
         self.chk_enable.setChecked(bool(snap.adc_enabled))
         self._config_seeded = True
 
     def _emit_apply(self) -> None:
+        # The ADC slave lives on SPI1 only; SPI3 is reserved for the PS2 link.
         self.apply_requested.emit(
             self.chk_enable.isChecked(),
-            int(self.cbo_bus.currentData()),
+            ADC_BUS_ID,
             int(self.cbo_cs.currentData()),
             int(self.cbo_period.currentData()),
         )
