@@ -100,6 +100,13 @@ CONTROL_GUI_CS/
 6. **Integrated Mock Engine**:
    - Select `MOCK_PORT` in the connection panel to run full simulation without physical hardware attached.
 
+7. **Gripper Closure Transition Experiment (Exp 2)**:
+   - `run_gripper_transition.bat` opens it **standalone** (no main window) with its own STM32 + Left/Right PaXini COM-port selectors; the `Gripper` panel button opens the same window and reuses the main window's existing links.
+   - Drives the STS3215 gripper from an adjustable open position to an adjustable close position at a low, configurable velocity, then holds.
+   - Samples at 5–200 Hz: servo position/load/voltage, all five ITV valve ADC channels (raw + mV), and both PaXini sensors (Fx, Fy, Fz, |F|, shear, μ, CoP, tilt, peak/contact counts).
+   - Writes one SQLite file with `experiment_meta`, `samples` and `transition_summary` tables, and reports the first contact onset (left/right) and the first valve-pressure crossing with the servo position at which each occurred.
+   - Live force and valve traces make the sensor↔valve transition visible while the run is in progress.
+
 ---
 
 ## 3. How to Build & Run

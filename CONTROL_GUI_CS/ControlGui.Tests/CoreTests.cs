@@ -650,5 +650,89 @@ namespace ControlGui.Tests
                 try { Directory.Delete(testDir, true); } catch { }
             }
         }
+
+        [TestMethod]
+        public void TestGripperTransitionMockRun()
+        {
+            string testDir = Path.Combine(Path.GetTempPath(), "ControlGuiTests_GripExp_" + Guid.NewGuid());
+            Directory.CreateDirectory(testDir);
+            string dbPath = Path.Combine(testDir, "gripper.db");
+
+            try
+            {
+                using var worker = new MotorWorker("MOCK_PORT", mock: true, pollHz: 30.0);
+                worker.Start();
+                Thread.Sleep(250);
+
+                Assert.IsTrue(worker.Snapshot().Connected);
+                Assert.IsTrue(worker.Snapshot().ServoOnline, "mock servo should be online");
+
+                SensorReading Make(int n)
+                {
+                    double fz = Math.Min(4.0, n * 0.05);
+                    return new SensorReading(
+                        n * 0.02, 0, 0, 0, fz, fz, 0, double.NaN,
+                        double.NaN, double.NaN, double.NaN, double.NaN,
+                        1, fz, 1, null);
+                }
+
+                int lc = 0, rc = 0;
+                SensorReading FakeLeft() { lc++; return Make(lc); }
+                SensorReading FakeRight() { rc++; return Make(rc); }
+
+                var cfg = new GripperTransitionConfig
+                {
+                    OpenPos = 55,
+                    ClosePos = 420,
+                    Speed = 2000,
+                    Accel = 20,
+                    SettleOpenSec = 0.3,
+                    HoldCloseSec = 0.3,
+                    ReleaseAtEnd = true,
+                    SampleRateHz = 40.0,
+                    DbPath = dbPath
+                };
+
+                using var runner = new GripperTransitionRunner(
+                    worker, cfg, FakeLeft, FakeRight, _ => { });
+
+                runner.Start();
+                var deadline = DateTime.UtcNow.AddSeconds(12);
+                while (DateTime.UtcNow < deadline)
+                {
+                    var st = runner.GetStatus();
+                    if (!st.Running && (st.State == "completed" || st.State == "error")) break;
+                    Thread.Sleep(50);
+                }
+
+                var final = runner.GetStatus();
+                Assert.AreEqual("completed", final.State, final.Error);
+                Assert.IsTrue(final.SampleCount > 10, $"expected samples, got {final.SampleCount}");
+
+                var onsets = runner.GetOnsets();
+                Assert.IsNotNull(onsets);
+                Assert.IsTrue(onsets!.LeftOnsetSec.HasValue, "left sensor onset should be detected");
+                Assert.IsTrue(onsets.RightOnsetSec.HasValue, "right sensor onset should be detected");
+                Assert.IsTrue(onsets.LeftOnsetPos > 0);
+
+                Assert.IsTrue(File.Exists(dbPath));
+                using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM samples";
+                long rows = Convert.ToInt64(cmd.ExecuteScalar());
+                Assert.IsTrue(rows > 10, $"expected sample rows, got {rows}");
+
+                cmd.CommandText = "SELECT COUNT(*) FROM transition_summary";
+                Assert.IsTrue(Convert.ToInt64(cmd.ExecuteScalar()) > 0);
+            }
+            finally
+            {
+                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                try { Directory.Delete(testDir, true); } catch { }
+            }
+        }
     }
 }

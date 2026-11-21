@@ -103,6 +103,27 @@ namespace ControlGui.Core.Motor
             }
         }
 
+        /// <summary>
+        /// One-off servo feedback read for experiments that own the link while
+        /// background polling is paused. Returns null if the servo is absent.
+        /// </summary>
+        public ServoFeedback? ServoFeedbackDirect(byte? sid = null, double timeoutSec = 0.15)
+        {
+            var c = _client;
+            if (c == null) return null;
+            lock (_clientIoLock)
+            {
+                try
+                {
+                    return c.ServoGetFeedback(sid ?? _servoId, timeoutSec);
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+        }
+
         public SpiAdcCtrlStatus? ConfigureSpiAdcDirect(bool enable, byte busId, byte csIdx, byte periodMs)
         {
             var c = _client;

@@ -11,6 +11,8 @@ namespace ControlGui.Wpf.Panels
         private MotorWorker? _worker;
         private bool _isUpdatingUi = false;
 
+        public event Action? ExperimentRequested;
+
         public GripperPanel()
         {
             InitializeComponent();
@@ -149,6 +151,11 @@ namespace ControlGui.Wpf.Panels
                 SliderTargetPos.Value = pos;
                 _isUpdatingUi = false;
             }
+        }
+
+        private void OnTransitionExpClick(object sender, RoutedEventArgs e)
+        {
+            ExperimentRequested?.Invoke();
         }
     }
 }

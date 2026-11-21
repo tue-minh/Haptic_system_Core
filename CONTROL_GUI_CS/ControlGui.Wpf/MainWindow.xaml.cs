@@ -65,6 +65,9 @@ namespace ControlGui.Wpf
             PanelHaptic.PingRequested += OnPingEsp32;
             PanelHaptic.BandwidthSweepRequested += OnOpenBandwidthSweep;
 
+            // Gripper Panel
+            PanelGripper.ExperimentRequested += OpenGripperTransitionWindow;
+
             // SPI ADC Panel
             PanelAdc.ApplyRequested += OnAdcApply;
             PanelAdc.ReadRequested += OnAdcRead;
@@ -211,6 +214,34 @@ namespace ControlGui.Wpf
         }
 
         private BandwidthExperimentWindow? _bandwidthWin;
+        private GripperTransitionWindow? _gripperExpWin;
+
+        public void OpenGripperTransitionWindow()
+        {
+            if (_gripperExpWin != null && _gripperExpWin.IsLoaded)
+            {
+                _gripperExpWin.Activate();
+                return;
+            }
+
+            // The experiment owns the STM32 link while it runs.
+            if (PanelHaptic.IsStreamingEnabled)
+            {
+                PanelHaptic.ChkEnable.IsChecked = false;
+            }
+
+            _gripperExpWin = new GripperTransitionWindow(
+                () => _motor,
+                () => _sensorLinks.GetValueOrDefault("L"),
+                () => _sensorLinks.GetValueOrDefault("R"),
+                PostLog)
+            {
+                Owner = this
+            };
+            _gripperExpWin.Closed += (_, _) => _gripperExpWin = null;
+            _gripperExpWin.Show();
+        }
+
         private void OnOpenBandwidthSweep()
         {
             if (_bandwidthWin != null && _bandwidthWin.IsLoaded)

@@ -36,9 +36,28 @@ public partial class App : Application
             e.Args,
             a => string.Equals(a, "--bandwidth", StringComparison.OrdinalIgnoreCase));
 
-        Window win = bandwidthOnly
-            ? new BandwidthExperimentWindow(() => null) { WindowStartupLocation = WindowStartupLocation.CenterScreen }
-            : new MainWindow();
+        bool gripperTransition = Array.Exists(
+            e.Args,
+            a => string.Equals(a, "--gripper-transition", StringComparison.OrdinalIgnoreCase));
+
+        Window win;
+        if (bandwidthOnly)
+        {
+            win = new BandwidthExperimentWindow(() => null) { WindowStartupLocation = WindowStartupLocation.CenterScreen };
+        }
+        else if (gripperTransition)
+        {
+            // Standalone experiment GUI: no main window, it manages its own
+            // STM32 + two PaXini connections.
+            win = new GripperTransitionWindow(() => null, () => null, () => null)
+            {
+                WindowStartupLocation = WindowStartupLocation.CenterScreen
+            };
+        }
+        else
+        {
+            win = new MainWindow();
+        }
 
         MainWindow = win;
         win.Show();
