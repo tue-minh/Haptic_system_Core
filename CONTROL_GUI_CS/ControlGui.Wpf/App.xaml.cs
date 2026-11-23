@@ -40,19 +40,35 @@ public partial class App : Application
             e.Args,
             a => string.Equals(a, "--gripper-transition", StringComparison.OrdinalIgnoreCase));
 
+        bool gripperMotion = Array.Exists(
+            e.Args,
+            a => string.Equals(a, "--gripper-motion", StringComparison.OrdinalIgnoreCase));
+
+        bool valveManual = Array.Exists(
+            e.Args,
+            a => string.Equals(a, "--valve-manual", StringComparison.OrdinalIgnoreCase));
+
         Window win;
         if (bandwidthOnly)
         {
             win = new BandwidthExperimentWindow(() => null) { WindowStartupLocation = WindowStartupLocation.CenterScreen };
         }
-        else if (gripperTransition)
+        else if (gripperTransition || gripperMotion)
         {
             // Standalone experiment GUI: no main window, it manages its own
             // STM32 + two PaXini connections.
-            win = new GripperTransitionWindow(() => null, () => null, () => null)
+            win = new GripperTransitionWindow(
+                () => null,
+                () => null,
+                () => null,
+                initialMotionMode: gripperMotion ? Core.Haptic.GripperMotionMode.ZMinusReturn : Core.Haptic.GripperMotionMode.None)
             {
                 WindowStartupLocation = WindowStartupLocation.CenterScreen
             };
+        }
+        else if (valveManual)
+        {
+            win = new ValveManualWindow { WindowStartupLocation = WindowStartupLocation.CenterScreen };
         }
         else
         {

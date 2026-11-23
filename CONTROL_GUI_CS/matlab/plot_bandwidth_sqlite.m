@@ -1,26 +1,134 @@
 %% plot_bandwidth_sqlite.m
 % Verify & plot Experiment 1b (Bandwidth Sweep) logged by ControlGui_CS into SQLite.
+% Supports plotting 1 file or overlaying multiple valve DBs (e.g. Valve_A..Valve_E)
+% in the same Time-Domain & Bode charts.
 %
 % Usage:
-%   plot_bandwidth_sqlite()                          % opens file picker
-%   plot_bandwidth_sqlite('recordings/bandwidth_xxx.db')
+%   plot_bandwidth_sqlite()                                  % auto-loads Valve_A..E in ../ControlGui.Wpf/recordings if found, else file picker (MultiSelect)
+%   plot_bandwidth_sqlite('pick')                            % opens multi-file picker
+%   plot_bandwidth_sqlite('path/to/folder')                  % plots all Valve_*.db (or *.db) in folder together
+%   plot_bandwidth_sqlite('Valve_A.db')                      % single file (detailed + 2nd-order fit + C# summary)
+%   plot_bandwidth_sqlite({'Valve_A.db', 'Valve_B.db', ...}) % multiple files in one chart
+%   plot_bandwidth_sqlite('Valve_A.db', 'Valve_B.db', ...)   % varargin multiple files in one chart
 
-function plot_bandwidth_sqlite(dbPath)
-    if nargin < 1 || isempty(dbPath)
-        [f, p] = uigetfile('*.db', 'Select Bandwidth Experiment SQLite DB');
-        if isequal(f, 0)
-            disp('Cancelled.');
+function plot_bandwidth_sqlite(varargin)
+    dbPaths = localResolveDbPaths(varargin{:});
+    if isempty(dbPaths)
+        disp('Cancelled / no database files selected.');
+        return;
+    end
+
+    nFiles = numel(dbPaths);
+    results = cell(nFiles, 1);
+    for i = 1:nFiles
+        if ~isfile(dbPaths{i})
+            error('SQLite file not found: %s', dbPaths{i});
+        end
+        results{i} = localProcessDb(dbPaths{i});
+    end
+
+    % Single-file detailed mode (keeps 2nd-order fit & C# GUI summary comparison)
+    if nFiles == 1
+        localPlotSingle(results{1});
+        return;
+    end
+
+    % Multi-file mode: plot all valves together in the same Time-Domain & Bode charts
+    localPlotMulti(results);
+end
+
+function dbPaths = localResolveDbPaths(varargin)
+    dbPaths = {};
+    thisDir = fileparts(mfilename('fullpath'));
+    defaultRecDir = fullfile(thisDir, '..', 'ControlGui.Wpf', 'recordings');
+
+    if nargin == 0
+        % Auto-detect Valve_A.db .. Valve_E.db in ../ControlGui.Wpf/recordings
+        letters = {'A', 'B', 'C', 'D', 'E'};
+        autoList = {};
+        for k = 1:numel(letters)
+            cand = fullfile(defaultRecDir, sprintf('Valve_%s.db', letters{k}));
+            if isfile(cand)
+                autoList{end+1} = cand; %#ok<AGROW>
+            end
+        end
+        if ~isempty(autoList)
+            dbPaths = autoList;
             return;
         end
-        dbPath = fullfile(p, f);
+        dbPaths = localPickFiles(defaultRecDir);
+        return;
     end
 
-    if ~isfile(dbPath)
-        error('SQLite file not found: %s', dbPath);
+    if nargin == 1
+        arg = varargin{1};
+        if (ischar(arg) || (isstring(arg) && isscalar(arg)))
+            s = char(arg);
+            if strcmpi(strtrim(s), 'pick')
+                dbPaths = localPickFiles(defaultRecDir);
+                return;
+            elseif isfolder(s)
+                d = dir(fullfile(s, 'Valve_*.db'));
+                if isempty(d)
+                    d = dir(fullfile(s, '*.db'));
+                end
+                [~, ord] = sort({d.name});
+                d = d(ord);
+                dbPaths = arrayfun(@(x) fullfile(x.folder, x.name), d, 'UniformOutput', false);
+                return;
+            elseif contains(s, '*')
+                d = dir(s);
+                [~, ord] = sort({d.name});
+                d = d(ord);
+                dbPaths = arrayfun(@(x) fullfile(x.folder, x.name), d, 'UniformOutput', false);
+                return;
+            else
+                dbPaths = {s};
+                return;
+            end
+        elseif iscell(arg)
+            dbPaths = cellfun(@char, arg(:)', 'UniformOutput', false);
+            return;
+        elseif isstring(arg)
+            dbPaths = cellstr(arg(:)');
+            return;
+        end
     end
 
+    % Varargin list of paths
+    for i = 1:nargin
+        arg = varargin{i};
+        if iscell(arg)
+            sub = cellfun(@char, arg(:)', 'UniformOutput', false);
+            dbPaths = [dbPaths, sub]; %#ok<AGROW>
+        elseif isstring(arg)
+            dbPaths = [dbPaths, cellstr(arg(:)')]; %#ok<AGROW>
+        else
+            dbPaths{end+1} = char(arg); %#ok<AGROW>
+        end
+    end
+end
+
+function dbPaths = localPickFiles(startDir)
+    dbPaths = {};
+    filterSpec = '*.db';
+    if isfolder(startDir)
+        filterSpec = fullfile(startDir, '*.db');
+    end
+    [f, p] = uigetfile(filterSpec, 'Select Bandwidth Experiment SQLite DB(s)', 'MultiSelect', 'on');
+    if isequal(f, 0)
+        return;
+    end
+    if iscell(f)
+        dbPaths = cellfun(@(fn) fullfile(p, fn), f, 'UniformOutput', false);
+    else
+        dbPaths = {fullfile(p, f)};
+    end
+end
+
+function res = localProcessDb(dbPath)
     conn = sqlite(dbPath, 'readonly');
-    cleanup = onCleanup(@() close(conn));
+    cleanup = onCleanup(@() close(conn)); %#ok<NASGU>
 
     metaTbl = fetch(conn, 'SELECT key, value FROM experiment_meta');
     samplesTbl = fetch(conn, [ ...
@@ -31,7 +139,6 @@ function plot_bandwidth_sqlite(dbPath)
         'SELECT step_idx, freq_hz, n_samples, amp_mv, phase_deg, mag_db, dc_offset_mv ', ...
         'FROM bode_summary ORDER BY freq_hz ASC']);
 
-    % Extract metadata helper
     if istable(metaTbl)
         keys = string(metaTbl.key);
         vals = string(metaTbl.value);
@@ -45,7 +152,6 @@ function plot_bandwidth_sqlite(dbPath)
     if isnan(chIdx) || chIdx < 0 || chIdx > 4, chIdx = 0; end
     sweepMode = lower(strtrim(getMeta("sweep_mode", "stepped_sine")));
 
-    % Convert samples table/cell to arrays
     if istable(samplesTbl)
         t_s      = double(samplesTbl.t_s);
         freq_hz  = double(samplesTbl.freq_hz);
@@ -62,22 +168,6 @@ function plot_bandwidth_sqlite(dbPath)
         ch_mv    = cell2mat(samplesTbl(:, 7 + chIdx));
     end
 
-    %% Figure 1: Time-domain Command vs Measured ADC
-    figure('Name', 'Experiment 1b - Time Domain', 'Color', 'w');
-    yyaxis left;
-    plot(t_s, u_pct, 'b-', 'LineWidth', 1.1);
-    ylabel('Command u(t) [%]');
-    ylim([-5, 105]);
-
-    yyaxis right;
-    plot(t_s, ch_mv, 'r-', 'LineWidth', 1.0);
-    ylabel(sprintf('Measured ADC Ch%d [mV]', chIdx));
-    grid on;
-    xlabel('Time [s]');
-    title(sprintf('Exp 1b (%s, Ch%d) — %s', sweepMode, chIdx, dbPath), 'Interpreter', 'none');
-    legend('Command u(t) [%]', sprintf('ADC Ch%d [mV]', chIdx), 'Location', 'best');
-
-    %% Cross-check Sine / Chirp Demodulation in MATLAB
     if sweepMode == "chirp"
         f0 = str2double(getMeta("chirp_f0_hz", "0.1"));
         f1 = str2double(getMeta("chirp_f1_hz", "10.0"));
@@ -138,12 +228,12 @@ function plot_bandwidth_sqlite(dbPath)
     end
 
     if isempty(fSorted)
-        warning('No valid Bode points extracted.');
-        return;
+        error('No valid Bode points extracted from %s.', dbPath);
     end
 
     aRef = ampSorted(1);
     magDbMatlab = 20 * log10(max(1e-6, ampSorted) / max(1e-6, aRef));
+    phaseUnwrapped = unwrap(deg2rad(phaseSorted)) * 180 / pi;
 
     % Interpolate -3 dB cutoff fc
     fcHz = NaN;
@@ -155,7 +245,7 @@ function plot_bandwidth_sqlite(dbPath)
         end
     end
 
-    % Fit 2nd-order + time delay model for smooth curve (Paper Fig. 6)
+    % Fit 2nd-order + time delay model
     fDense = logspace(log10(fSorted(1)), log10(fSorted(end)), 200).';
     magFit = [];
     phaseFit = [];
@@ -167,14 +257,8 @@ function plot_bandwidth_sqlite(dbPath)
     catch
     end
 
-    %% Figure 2: Bode Plot (Measured vs Model Fit & C# bode_summary)
-    figure('Name', 'Experiment 1b - Bode Plot', 'Color', 'w');
-    subplot(2, 1, 1);
-    semilogx(fSorted, magDbMatlab, 'o', 'LineWidth', 1.4, 'MarkerSize', 6, 'DisplayName', 'Measured (MATLAB)');
-    hold on;
-    if ~isempty(magFit)
-        semilogx(fDense, magFit, '-', 'LineWidth', 1.8, 'DisplayName', '2nd-Order Fit');
-    end
+    % C# bode_summary columns
+    fCs = []; mCs = []; pCs = [];
     if ~isempty(bodeTbl)
         if istable(bodeTbl)
             fCs = double(bodeTbl.freq_hz);
@@ -185,30 +269,166 @@ function plot_bandwidth_sqlite(dbPath)
             mCs = cell2mat(bodeTbl(:, 6));
             pCs = cell2mat(bodeTbl(:, 5));
         end
-        semilogx(fCs, mCs, 'x--', 'LineWidth', 1.1, 'MarkerSize', 6, 'DisplayName', 'C# GUI Summary');
+    end
+
+    [~, baseName, ~] = fileparts(dbPath);
+    shortName = regexprep(baseName, '_', ' ');
+
+    res = struct();
+    res.dbPath = dbPath;
+    res.label = sprintf('%s (Ch%d)', shortName, chIdx);
+    res.shortName = shortName;
+    res.chIdx = chIdx;
+    res.sweepMode = sweepMode;
+    res.u0Pct = str2double(getMeta("u0_pct", "NaN"));
+    res.uaPct = str2double(getMeta("ua_pct", "NaN"));
+    res.t_s = t_s;
+    res.u_pct = u_pct;
+    res.ch_mv = ch_mv;
+    res.fSorted = fSorted;
+    res.ampSorted = ampSorted;
+    res.magDb = magDbMatlab;
+    res.phaseDeg = phaseSorted;
+    res.phaseUnwrapped = phaseUnwrapped;
+    res.fcHz = fcHz;
+    res.fDense = fDense;
+    res.magFit = magFit;
+    res.phaseFit = phaseFit;
+    res.fCs = fCs;
+    res.mCs = mCs;
+    res.pCs = pCs;
+end
+
+function localPlotSingle(r)
+    %% Figure 1: Time-domain Command vs Measured ADC
+    figure('Name', 'Experiment 1b - Time Domain', 'Color', 'w');
+    yyaxis left;
+    plot(r.t_s, r.u_pct, 'b-', 'LineWidth', 1.1);
+    ylabel('Command u(t) [%]');
+    ylim([-5, 105]);
+
+    yyaxis right;
+    plot(r.t_s, r.ch_mv, 'r-', 'LineWidth', 1.0);
+    ylabel(sprintf('Measured ADC Ch%d [mV]', r.chIdx));
+    grid on;
+    xlabel('Time [s]');
+    title(sprintf('Exp 1b (%s, Ch%d) — %s', r.sweepMode, r.chIdx, r.dbPath), 'Interpreter', 'none');
+    legend('Command u(t) [%]', sprintf('ADC Ch%d [mV]', r.chIdx), 'Location', 'best');
+
+    %% Figure 2: Bode Plot (Measured vs Model Fit & C# bode_summary)
+    figure('Name', 'Experiment 1b - Bode Plot', 'Color', 'w');
+    ax1 = subplot(2, 1, 1);
+    semilogx(r.fSorted, r.magDb, 'o', 'LineWidth', 1.4, 'MarkerSize', 6, 'DisplayName', 'Measured (MATLAB)');
+    hold on;
+    if ~isempty(r.magFit)
+        semilogx(r.fDense, r.magFit, '-', 'LineWidth', 1.8, 'DisplayName', '2nd-Order Fit');
+    end
+    if ~isempty(r.fCs)
+        semilogx(r.fCs, r.mCs, 'x--', 'LineWidth', 1.1, 'MarkerSize', 6, 'DisplayName', 'C# GUI Summary');
     end
     yline(-3, '--r', '-3 dB', 'LineWidth', 1.2, 'HandleVisibility', 'off');
-    if ~isnan(fcHz)
-        xline(fcHz, ':k', sprintf('fc = %.2f Hz', fcHz), 'LineWidth', 1.4, 'HandleVisibility', 'off');
+    if ~isnan(r.fcHz)
+        xline(r.fcHz, ':k', sprintf('fc = %.2f Hz', r.fcHz), 'LineWidth', 1.4, 'HandleVisibility', 'off');
     end
     grid on;
     ylabel('Magnitude [dB]');
-    title(sprintf('Bode Frequency Response (%s, Ch%d) | -3 dB fc = %.2f Hz', sweepMode, chIdx, fcHz), 'Interpreter', 'none');
+    title(sprintf('Bode Frequency Response (%s, %s) | -3 dB fc = %.2f Hz', r.sweepMode, r.label, r.fcHz), 'Interpreter', 'none');
     legend('Location', 'southwest');
 
-    subplot(2, 1, 2);
-    phUnwrapped = unwrap(deg2rad(phaseSorted)) * 180/pi;
-    semilogx(fSorted, phUnwrapped, 'o', 'LineWidth', 1.4, 'MarkerSize', 6, 'DisplayName', 'Measured (MATLAB)');
+    ax2 = subplot(2, 1, 2);
+    semilogx(r.fSorted, r.phaseUnwrapped, 'o', 'LineWidth', 1.4, 'MarkerSize', 6, 'DisplayName', 'Measured (MATLAB)');
     hold on;
-    if ~isempty(phaseFit)
-        semilogx(fDense, phaseFit, '-', 'LineWidth', 1.8, 'DisplayName', '2nd-Order + Delay Fit');
+    if ~isempty(r.phaseFit)
+        semilogx(r.fDense, r.phaseFit, '-', 'LineWidth', 1.8, 'DisplayName', '2nd-Order + Delay Fit');
     end
-    if ~isempty(bodeTbl)
-        semilogx(fCs, unwrap(deg2rad(pCs)) * 180/pi, 'x--', 'LineWidth', 1.1, 'MarkerSize', 6, 'DisplayName', 'C# GUI Summary');
+    if ~isempty(r.fCs)
+        semilogx(r.fCs, unwrap(deg2rad(r.pCs)) * 180/pi, 'x--', 'LineWidth', 1.1, 'MarkerSize', 6, 'DisplayName', 'C# GUI Summary');
     end
     grid on;
     xlabel('Frequency [Hz]');
     ylabel('Phase [deg]');
+    linkaxes([ax1, ax2], 'x');
+end
+
+function localPlotMulti(results)
+    n = numel(results);
+    colors = lines(max(n, 5));
+    markers = {'o', 's', '^', 'd', 'v', 'p', 'h', '*'};
+
+    fprintf('\n=== Bandwidth Summary (%d Valves) ===\n', n);
+    fprintf('%-16s | Ch |   u0 / ua (%%) | Amp@0.1Hz (mV) | -3dB fc (Hz) | Samples\n', 'Valve');
+    fprintf('%s\n', repmat('-', 1, 80));
+    for i = 1:n
+        r = results{i};
+        fprintf('%-16s | %2d | %5.1f / %5.1f | %14.2f | %12.2f | %7d\n', ...
+            r.shortName, r.chIdx, r.u0Pct, r.uaPct, r.ampSorted(1), r.fcHz, numel(r.t_s));
+    end
+    fprintf('\n');
+
+    %% Figure 1: Combined Time-Domain Waveform (Command + All Valves on Same Chart)
+    figure('Name', sprintf('Experiment 1b - Time Domain (%d Valves)', n), 'Color', 'w', 'Position', [80, 120, 1050, 620]);
+    axU = subplot(4, 1, 1);
+    plot(results{1}.t_s, results{1}.u_pct, 'k-', 'LineWidth', 1.1);
+    grid on;
+    ylabel('u(t) [%]');
+    title(sprintf('Time-Domain Excitation & Response (%d Valves)', n));
+    if ~isnan(results{1}.u0Pct) && ~isnan(results{1}.uaPct)
+        legend(sprintf('Command u(t): u0=%.1f%%, ua=%.1f%%', results{1}.u0Pct, results{1}.uaPct), 'Location', 'best');
+    else
+        legend('Command u(t) [%]', 'Location', 'best');
+    end
+
+    axY = subplot(4, 1, 2:4);
+    hold on;
+    for i = 1:n
+        r = results{i};
+        c = colors(i, :);
+        plot(r.t_s, r.ch_mv, '-', 'Color', c, 'LineWidth', 1.0, 'DisplayName', r.label);
+    end
+    grid on;
+    xlabel('Time [s]');
+    ylabel('Measured ADC [mV]');
+    legend('Location', 'best');
+    linkaxes([axU, axY], 'x');
+
+    %% Figure 2: Combined Bode Plot (All Valves in One Chart)
+    figure('Name', sprintf('Experiment 1b - Combined Bode (%d Valves)', n), 'Color', 'w', 'Position', [140, 80, 1050, 680]);
+    axMag = subplot(2, 1, 1);
+    hold on;
+    for i = 1:n
+        r = results{i};
+        c = colors(i, :);
+        mk = markers{mod(i-1, numel(markers)) + 1};
+        if isnan(r.fcHz)
+            legStr = r.label;
+        else
+            legStr = sprintf('%s | fc = %.2f Hz', r.label, r.fcHz);
+        end
+        semilogx(r.fSorted, r.magDb, ['-' mk], 'Color', c, 'LineWidth', 1.5, ...
+            'MarkerSize', 5, 'MarkerFaceColor', 'w', 'DisplayName', legStr);
+    end
+    set(axMag, 'XScale', 'log');
+    yline(-3, '--r', '-3 dB', 'LineWidth', 1.3, 'LabelHorizontalAlignment', 'left', 'HandleVisibility', 'off');
+    grid on;
+    ylabel('Magnitude [dB]');
+    title(sprintf('Combined Bode Frequency Response (%d Valves)', n));
+    legend('Location', 'southwest', 'FontSize', 9);
+
+    axPh = subplot(2, 1, 2);
+    hold on;
+    for i = 1:n
+        r = results{i};
+        c = colors(i, :);
+        mk = markers{mod(i-1, numel(markers)) + 1};
+        semilogx(r.fSorted, r.phaseUnwrapped, ['-' mk], 'Color', c, 'LineWidth', 1.5, ...
+            'MarkerSize', 5, 'MarkerFaceColor', 'w', 'DisplayName', r.label);
+    end
+    set(axPh, 'XScale', 'log');
+    grid on;
+    xlabel('Frequency [Hz]');
+    ylabel('Phase [deg]');
+    legend('Location', 'southwest', 'FontSize', 9);
+    linkaxes([axMag, axPh], 'x');
 end
 
 function val = localGetMeta(keys, vals, keyName, defaultVal)

@@ -5,7 +5,6 @@ using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using ControlGui.Core.Haptic;
-using ControlGui.Wpf.Windows;
 using ControlGui.Core.Motor;
 using ControlGui.Core.Paxini;
 using ControlGui.Core.Recording;
@@ -63,10 +62,6 @@ namespace ControlGui.Wpf
             // Haptic Panel
             PanelHaptic.EnabledChanged += OnHapticToggled;
             PanelHaptic.PingRequested += OnPingEsp32;
-            PanelHaptic.BandwidthSweepRequested += OnOpenBandwidthSweep;
-
-            // Gripper Panel
-            PanelGripper.ExperimentRequested += OpenGripperTransitionWindow;
 
             // SPI ADC Panel
             PanelAdc.ApplyRequested += OnAdcApply;
@@ -213,55 +208,6 @@ namespace ControlGui.Wpf
             _motor?.PingHaptic();
         }
 
-        private BandwidthExperimentWindow? _bandwidthWin;
-        private GripperTransitionWindow? _gripperExpWin;
-
-        public void OpenGripperTransitionWindow()
-        {
-            if (_gripperExpWin != null && _gripperExpWin.IsLoaded)
-            {
-                _gripperExpWin.Activate();
-                return;
-            }
-
-            // The experiment owns the STM32 link while it runs.
-            if (PanelHaptic.IsStreamingEnabled)
-            {
-                PanelHaptic.ChkEnable.IsChecked = false;
-            }
-
-            _gripperExpWin = new GripperTransitionWindow(
-                () => _motor,
-                () => _sensorLinks.GetValueOrDefault("L"),
-                () => _sensorLinks.GetValueOrDefault("R"),
-                PostLog)
-            {
-                Owner = this
-            };
-            _gripperExpWin.Closed += (_, _) => _gripperExpWin = null;
-            _gripperExpWin.Show();
-        }
-
-        private void OnOpenBandwidthSweep()
-        {
-            if (_bandwidthWin != null && _bandwidthWin.IsLoaded)
-            {
-                _bandwidthWin.Activate();
-                return;
-            }
-            // Pause background 100 Hz tactile streaming while Bandwidth Sweep window is open
-            if (PanelHaptic.IsStreamingEnabled)
-            {
-                PanelHaptic.ChkEnable.IsChecked = false;
-            }
-            _bandwidthWin = new BandwidthExperimentWindow(() => _motor, PostLog)
-            {
-                Owner = this
-            };
-            _bandwidthWin.Closed += (_, _) => _bandwidthWin = null;
-            _bandwidthWin.Show();
-        }
-
         private void OnAdcApply(bool enable, byte busId, byte csIdx, byte periodMs)
         {
             if (_motor == null)
@@ -361,6 +307,20 @@ namespace ControlGui.Wpf
             // Update Sensor Monitor (2D Plot + Metrics)
             PanelSensorMonitor.UpdateTelemetry(readingL, readingR);
 
+            // 5. Update Haptic Streamer
+            SyncHapticStreamer(motorConnected);
+            HapticSnapshot? liveHapticSnap = null;
+            if (_hapticStreamer != null)
+            {
+                _hapticStreamer.UpdateSensors(readingL, readingR);
+                liveHapticSnap = _hapticStreamer.GetSnapshot();
+                PanelHaptic.UpdateStatus(liveHapticSnap, true, motorConnected);
+            }
+            else
+            {
+                PanelHaptic.UpdateStatus(null, false, motorConnected);
+            }
+
             // 4. Update Tabbed Views
             int tabIndex = TabsSurface.SelectedIndex;
             if (tabIndex == 0) // Taxel Map (Live)
@@ -373,24 +333,17 @@ namespace ControlGui.Wpf
             }
             else if (tabIndex == 2) // Haptic Valves
             {
-                // Generate live preview payload if not streaming
-                double nowSec = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
-                byte[] previewPayload = _hapticPreviewSynth.Synthesize(readingL, readingR, nowSec: nowSec);
-                var snap = HapticSnapshot.FromPayload(previewPayload, nowSec);
-                ViewValves.Update(snap, _hapticStreamer != null);
-            }
-
-            // 5. Update Haptic Streamer
-            SyncHapticStreamer(motorConnected);
-            if (_hapticStreamer != null)
-            {
-                _hapticStreamer.UpdateSensors(readingL, readingR);
-                var hapticSnap = _hapticStreamer.GetSnapshot();
-                PanelHaptic.UpdateStatus(hapticSnap, true, motorConnected);
-            }
-            else
-            {
-                PanelHaptic.UpdateStatus(null, false, motorConnected);
+                if (liveHapticSnap != null)
+                {
+                    ViewValves.Update(liveHapticSnap, true);
+                }
+                else
+                {
+                    double nowSec = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+                    byte[] previewPayload = _hapticPreviewSynth.Synthesize(readingL, readingR, nowSec: nowSec);
+                    var snap = HapticSnapshot.FromPayload(previewPayload, nowSec);
+                    ViewValves.Update(snap, false);
+                }
             }
 
             // 6. Update Recording Panel

@@ -131,6 +131,22 @@ namespace ControlGui.Tests
             var frame = Frame.FromBytes(wireFrame);
             Assert.AreEqual(HapticConstants.CanId, frame.CanId);
             Assert.AreEqual(8, frame.Dlc);
+
+            // Real PaxiniSensorWorker readings use Stopwatch T (~12.5s) + Unix UTC Epoch (~1.7e9s),
+            // while Stm32HapticStreamer passes Unix UTC seconds as nowSec (null).
+            double epochNow = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
+            var workerLeft = left with { T = 12.5, Epoch = epochNow - 0.02 };
+            var workerRight = right with { T = 12.5, Epoch = epochNow - 0.02 };
+            byte[] livePayload = synth.Synthesize(workerLeft, workerRight);
+            Assert.AreEqual((byte)20, livePayload[0]);
+            Assert.AreEqual((byte)50, livePayload[1]);
+
+            // Stale Epoch (> StaleSeconds) must zero out forces cleanly
+            var staleLeft = left with { T = 12.5, Epoch = epochNow - 1.0 };
+            var staleRight = right with { T = 12.5, Epoch = epochNow - 1.0 };
+            byte[] stalePayload = synth.Synthesize(staleLeft, staleRight, nowSec: epochNow);
+            Assert.AreEqual((byte)0, stalePayload[0]);
+            Assert.AreEqual((byte)0, stalePayload[1]);
         }
 
         [TestMethod]
@@ -713,6 +729,7 @@ namespace ControlGui.Tests
                 Assert.IsNotNull(onsets);
                 Assert.IsTrue(onsets!.LeftOnsetSec.HasValue, "left sensor onset should be detected");
                 Assert.IsTrue(onsets.RightOnsetSec.HasValue, "right sensor onset should be detected");
+                Assert.IsTrue(onsets.ValveOnsetSec.HasValue, "valve onset should follow PaXini haptic stream");
                 Assert.IsTrue(onsets.LeftOnsetPos > 0);
 
                 Assert.IsTrue(File.Exists(dbPath));
@@ -732,6 +749,102 @@ namespace ControlGui.Tests
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
                 try { Directory.Delete(testDir, true); } catch { }
+            }
+        }
+
+        [TestMethod]
+        public void TestGripperMotionZAndXMockRun()
+        {
+            foreach (var mode in new[] { GripperMotionMode.ZMinusReturn, GripperMotionMode.XPlusReturn })
+            {
+                string testDir = Path.Combine(Path.GetTempPath(), "ControlGuiTests_GripMotion_" + Guid.NewGuid());
+                Directory.CreateDirectory(testDir);
+                string dbPath = Path.Combine(testDir, $"motion_{mode}.db");
+
+                try
+                {
+                    using var worker = new MotorWorker("MOCK_PORT", mock: true, pollHz: 30.0);
+                    worker.Start();
+                    Thread.Sleep(250);
+
+                    SensorReading Make(int n) => new(
+                        n * 0.02, 0, 0.4, 0.1, 1.5, 1.6, 0.4, 0.27,
+                        double.NaN, double.NaN, double.NaN, double.NaN,
+                        1, 1.5, 1, null);
+
+                    int tick = 0;
+                    SensorReading Fake() { tick++; return Make(tick); }
+
+                    var cfg = new GripperTransitionConfig
+                    {
+                        OpenPos = 55,
+                        ClosePos = 250,
+                        Speed = 2000,
+                        Accel = 20,
+                        SettleOpenSec = 0.2,
+                        HoldCloseSec = 0.2,
+                        ReleaseAtEnd = true,
+                        MotionMode = mode,
+                        MotionDistanceMm = 8.0,
+                        HoldAtTargetSec = 0.2,
+                        SampleRateHz = 40.0,
+                        DbPath = dbPath
+                    };
+
+                    Assert.AreEqual(5.0, cfg.XyVelMmS);
+                    Assert.AreEqual(50.0, cfg.XyAccelMmS2);
+                    Assert.AreEqual(2.0, cfg.ZVelMmS);
+                    Assert.AreEqual(50.0, cfg.ZAccelMmS2);
+
+                    using var runner = new GripperTransitionRunner(worker, cfg, Fake, Fake, _ => { });
+                    runner.Start();
+                    var deadline = DateTime.UtcNow.AddSeconds(12);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        var st = runner.GetStatus();
+                        if (!st.Running && (st.State == "completed" || st.State == "error")) break;
+                        Thread.Sleep(40);
+                    }
+
+                    var final = runner.GetStatus();
+                    Assert.AreEqual("completed", final.State, final.Error);
+
+                    using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+                    conn.Open();
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT DISTINCT phase FROM samples";
+                    var phases = new System.Collections.Generic.HashSet<string>();
+                    using (var r = cmd.ExecuteReader())
+                    {
+                        while (r.Read()) phases.Add(r.GetString(0));
+                    }
+                    Assert.IsTrue(phases.Contains("Closing"));
+                    Assert.IsTrue(phases.Contains("MovingOut"));
+                    Assert.IsTrue(phases.Contains("Returning"));
+                    Assert.IsTrue(phases.Contains("Releasing"));
+
+                    if (mode == GripperMotionMode.ZMinusReturn)
+                    {
+                        cmd.CommandText = "SELECT MIN(step_z_mm) FROM samples WHERE phase IN ('MovingOut', 'HoldAtTarget')";
+                        Assert.AreEqual(-8.0, Convert.ToDouble(cmd.ExecuteScalar()), 0.2);
+                        cmd.CommandText = "SELECT step_z_mm FROM samples WHERE phase = 'Releasing' ORDER BY id DESC LIMIT 1";
+                        Assert.AreEqual(0.0, Convert.ToDouble(cmd.ExecuteScalar()), 0.2);
+                    }
+                    else
+                    {
+                        cmd.CommandText = "SELECT MAX(step_x_mm) FROM samples WHERE phase IN ('MovingOut', 'HoldAtTarget')";
+                        Assert.AreEqual(8.0, Convert.ToDouble(cmd.ExecuteScalar()), 0.2);
+                        cmd.CommandText = "SELECT step_x_mm FROM samples WHERE phase = 'Releasing' ORDER BY id DESC LIMIT 1";
+                        Assert.AreEqual(0.0, Convert.ToDouble(cmd.ExecuteScalar()), 0.2);
+                    }
+                }
+                finally
+                {
+                    Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                    try { Directory.Delete(testDir, true); } catch { }
+                }
             }
         }
     }

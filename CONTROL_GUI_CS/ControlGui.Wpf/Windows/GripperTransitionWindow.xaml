@@ -54,50 +54,128 @@
                 </GroupBox>
 
                 <GroupBox Header="Gripper motion (STS3215)" FontWeight="Bold" Margin="0,0,0,8">
-                    <Grid Margin="6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="140"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="120"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
+                    <StackPanel Margin="6">
+                        <!-- Servo ID, Scan & Ping -->
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="58"/>
+                                <ColumnDefinition Width="44"/>
+                                <ColumnDefinition Width="68"/>
+                                <ColumnDefinition Width="50"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Servo ID:" VerticalAlignment="Center" FontWeight="Normal"/>
+                            <TextBox Grid.Column="1" x:Name="TxtServoId" Text="1" Margin="0,0,6,0" VerticalContentAlignment="Center"
+                                     FontWeight="Normal" TextChanged="OnServoIdTextChanged"/>
+                            <Button Grid.Column="2" x:Name="BtnScanServo" Content="Scan ID" Margin="0,0,4,0" FontWeight="Normal"
+                                    IsEnabled="False" ToolTip="Scan bus for active STS3215 servo IDs (1..16)" Click="OnScanServoClick"/>
+                            <Button Grid.Column="3" x:Name="BtnPingServo" Content="Ping" Margin="0,0,4,0" FontWeight="Normal"
+                                    IsEnabled="False" ToolTip="Ping the selected servo ID" Click="OnPingServoClick"/>
+                            <TextBlock Grid.Column="4" x:Name="TxtServoStatus" Text="Offline" VerticalAlignment="Center"
+                                       Foreground="#757575" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Open position:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
-                        <TextBox Grid.Row="0" Grid.Column="1" x:Name="TxtOpenPos" Text="55" Margin="0,3" FontWeight="Normal"
-                                 ToolTip="Servo step for fully open (55..419)"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="140"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="120"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Close position:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
-                        <TextBox Grid.Row="1" Grid.Column="1" x:Name="TxtClosePos" Text="420" Margin="0,3" FontWeight="Normal"
-                                 ToolTip="Servo step for fully closed (open+1..420)"/>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Open position:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="TxtOpenPos" Text="55" Margin="0,3" FontWeight="Normal"
+                                     ToolTip="Servo step for fully open (55..419)"/>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Close speed (steps/s):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
-                        <TextBox Grid.Row="2" Grid.Column="1" x:Name="TxtSpeed" Text="150" Margin="0,3" FontWeight="Normal"
-                                 ToolTip="Low velocity. STS3215 range 100..3000 steps/s"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Close position:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="TxtClosePos" Text="420" Margin="0,3" FontWeight="Normal"
+                                     ToolTip="Servo step for fully closed (open+1..420)"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Acceleration:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
-                        <TextBox Grid.Row="3" Grid.Column="1" x:Name="TxtAccel" Text="20" Margin="0,3" FontWeight="Normal"
-                                 ToolTip="STS3215 acceleration factor 10..200"/>
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Close speed (steps/s):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="TxtSpeed" Text="150" Margin="0,3" FontWeight="Normal"
+                                     ToolTip="Low velocity. STS3215 range 100..3000 steps/s"/>
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Settle open (s):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
-                        <TextBox Grid.Row="4" Grid.Column="1" x:Name="TxtSettle" Text="1.5" Margin="0,3" FontWeight="Normal"
-                                 ToolTip="Baseline recording once the gripper reaches the open position"/>
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Acceleration:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="3" Grid.Column="1" x:Name="TxtAccel" Text="20" Margin="0,3" FontWeight="Normal"
+                                     ToolTip="STS3215 acceleration factor 10..200"/>
 
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Hold closed (s):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
-                        <TextBox Grid.Row="5" Grid.Column="1" x:Name="TxtHold" Text="3" Margin="0,3" FontWeight="Normal"
-                                 ToolTip="Keep sampling at the closed position after the servo stops"/>
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Settle open (s):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="4" Grid.Column="1" x:Name="TxtSettle" Text="1.5" Margin="0,3" FontWeight="Normal"
+                                     ToolTip="Baseline recording once the gripper reaches the open position"/>
 
-                        <CheckBox Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2" x:Name="ChkRelease"
-                                  Content="Return to open position at the end" IsChecked="True" FontWeight="Normal" Margin="0,6,0,2"/>
-                    </Grid>
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Hold closed (s):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="5" Grid.Column="1" x:Name="TxtHold" Text="3" Margin="0,3" FontWeight="Normal"
+                                     ToolTip="Keep sampling at the closed position after the servo stops"/>
+
+                            <CheckBox Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2" x:Name="ChkRelease"
+                                      Content="Return to open position at the end" IsChecked="True" FontWeight="Normal" Margin="0,6,0,2"/>
+                        </Grid>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="Stepper Motion (Post-Close)" FontWeight="Bold" Margin="0,0,0,8">
+                    <StackPanel Margin="6">
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="108"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Motion mode:" VerticalAlignment="Center" FontWeight="Normal"/>
+                            <ComboBox Grid.Column="1" x:Name="CboMotionMode" FontWeight="Normal" SelectionChanged="OnMotionModeChanged">
+                                <ComboBoxItem Content="None (Close &amp; Hold only)" Tag="none" IsSelected="True"/>
+                                <ComboBoxItem Content="Close → Z- → Return Z → Release" Tag="z_minus"/>
+                                <ComboBoxItem Content="Close → X+ → Return X → Release" Tag="x_plus"/>
+                                <ComboBoxItem Content="Close → Y+ → Return Y → Release" Tag="y_plus"/>
+                            </ComboBox>
+                        </Grid>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="108"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="92"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Distance (mm):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="TxtMotionDist" Text="10" Margin="0,3,6,3" FontWeight="Normal"
+                                     ToolTip="Excursion distance along Z-, X+, or Y+ in mm"/>
+                            <TextBlock Grid.Row="0" Grid.Column="2" Text="Hold peak (s):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="0" Grid.Column="3" x:Name="TxtHoldTarget" Text="1.0" Margin="0,3" FontWeight="Normal"
+                                     ToolTip="Dwell time at Z-/X+/Y+ before returning"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="X/Y Vel (mm/s):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="TxtXyVel" Text="5" Margin="0,3,6,3" FontWeight="Normal"/>
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="X/Y Accel:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="1" Grid.Column="3" x:Name="TxtXyAccel" Text="50" Margin="0,3" FontWeight="Normal"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Z Vel (mm/s):" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="TxtZVel" Text="2" Margin="0,3,6,3" FontWeight="Normal"/>
+                            <TextBlock Grid.Row="2" Grid.Column="2" Text="Z Accel:" VerticalAlignment="Center" FontWeight="Normal" Margin="0,3"/>
+                            <TextBox Grid.Row="2" Grid.Column="3" x:Name="TxtZAccel" Text="50" Margin="0,3" FontWeight="Normal"/>
+
+                            <Button Grid.Row="3" Grid.Column="0" x:Name="BtnStepEnable" Content="Enable Stepper" Margin="0,4,6,2" FontWeight="Normal"
+                                    IsEnabled="False" Click="OnStepEnableClick"/>
+                            <TextBlock Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="3" x:Name="TxtStepperPos"
+                                       Text="Stepper: ---" VerticalAlignment="Center" FontFamily="Consolas" FontSize="11"
+                                       Foreground="#616161" FontWeight="Normal" Margin="0,4,0,2"/>
+                        </Grid>
+                    </StackPanel>
                 </GroupBox>
 
                 <GroupBox Header="Sampling &amp; SQLite Logging" FontWeight="Bold" Margin="0,0,0,8">
@@ -181,6 +259,7 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="1.6*"/>
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -207,6 +286,9 @@
 
                     <TextBlock Grid.Row="0" Grid.Column="6" Text="Valve max mV" FontSize="10" Foreground="#757575" HorizontalAlignment="Center"/>
                     <TextBlock Grid.Row="1" Grid.Column="6" x:Name="TxtLiveValve" Text="---" FontFamily="Consolas" FontSize="16" Foreground="#D32F2F" HorizontalAlignment="Center"/>
+
+                    <TextBlock Grid.Row="0" Grid.Column="7" Text="Stepper XYZ mm" FontSize="10" Foreground="#757575" HorizontalAlignment="Center"/>
+                    <TextBlock Grid.Row="1" Grid.Column="7" x:Name="TxtLiveStep" Text="---" FontFamily="Consolas" FontSize="13" Foreground="#424242" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Grid>
             </GroupBox>
 

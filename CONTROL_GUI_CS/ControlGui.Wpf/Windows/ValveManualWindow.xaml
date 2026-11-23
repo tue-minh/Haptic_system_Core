@@ -1,0 +1,137 @@
+<Window x:Class="ControlGui.Wpf.Windows.ValveManualWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:panels="clr-namespace:ControlGui.Wpf.Panels"
+        Title="Manual 5-Valve Control &amp; ADC Monitor"
+        Height="840" Width="1260"
+        WindowStartupLocation="CenterScreen"
+        Background="#FAFAFA">
+    <Grid Margin="10">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="520" MinWidth="460"/>
+            <ColumnDefinition Width="10"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left Column: STM32 Connection + Manual 5-Valve Controls -->
+        <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- STM32 Connection -->
+                <GroupBox Header="STM32 Link" FontWeight="Bold" Margin="0,0,0,8">
+                    <StackPanel Margin="6" TextElement.FontWeight="Normal">
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="70"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="90"/>
+                                <ColumnDefinition Width="30"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="COM Port:" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Column="1" x:Name="CboComPort" Margin="0,0,6,0"/>
+                            <Button Grid.Column="2" x:Name="BtnConnect" Content="Connect" Click="OnConnectClick"/>
+                            <Button Grid.Column="3" Content="↻" Margin="4,0,0,0" ToolTip="Refresh COM ports" Click="OnRefreshPortsClick"/>
+                        </Grid>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" x:Name="TxtComStatus" Text="Disconnected" VerticalAlignment="Center"
+                                       Foreground="#757575" TextWrapping="Wrap" Margin="0,0,8,0"/>
+                            <Button Grid.Column="1" x:Name="BtnPingEsp32" Content="Ping ESP32 (0x301)" Padding="10,4"
+                                    IsEnabled="False" Click="OnPingEsp32Click"/>
+                        </Grid>
+
+                        <TextBlock x:Name="TxtPingResult" Text="ESP32 ping: not run" FontSize="11"
+                                   Foreground="#757575" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </GroupBox>
+
+                <!-- 5-Valve Manual Output -->
+                <GroupBox Header="Manual 5-Valve Control  (CAN 0x300 @ 100 Hz)" FontWeight="Bold" Margin="0,0,0,8">
+                    <StackPanel Margin="6" TextElement.FontWeight="Normal">
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <CheckBox Grid.Column="0" x:Name="ChkStream" Content="Stream CAN 0x300 @ 100 Hz (keep ESP32 active)"
+                                      IsChecked="True" VerticalAlignment="Center" Checked="OnStreamToggled" Unchecked="OnStreamToggled"/>
+                            <Button Grid.Column="1" x:Name="BtnVentAll" Content="ALL 0% (VENT)" Padding="12,5"
+                                    Background="#D32F2F" Foreground="White" FontWeight="Bold" Click="OnVentAllClick"/>
+                        </Grid>
+
+                        <!-- Quick Set All Presets -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <TextBlock Text="Set All:" VerticalAlignment="Center" Foreground="#616161" Margin="0,0,8,0"/>
+                            <Button Content="0%" Width="46" Margin="0,0,4,0" Click="OnSetAllPresetClick" Tag="0"/>
+                            <Button Content="25%" Width="46" Margin="0,0,4,0" Click="OnSetAllPresetClick" Tag="25"/>
+                            <Button Content="50%" Width="46" Margin="0,0,4,0" Click="OnSetAllPresetClick" Tag="50"/>
+                            <Button Content="75%" Width="46" Margin="0,0,4,0" Click="OnSetAllPresetClick" Tag="75"/>
+                            <Button Content="100%" Width="50" Click="OnSetAllPresetClick" Tag="100"/>
+                        </StackPanel>
+
+                        <!-- Valve Rows (populated cleanly in code-behind or explicit XAML; explicit controls via StackPanel) -->
+                        <StackPanel x:Name="PanelValveSliders"/>
+
+                        <!-- Wire Preview & Rate -->
+                        <Border Background="#F5F5F5" BorderBrush="#E0E0E0" BorderThickness="1" CornerRadius="3" Padding="6,4" Margin="0,6,0,0">
+                            <StackPanel>
+                                <TextBlock x:Name="TxtTxStats" Text="TX: idle (0 frames, 0.0 Hz)" FontFamily="Consolas" FontSize="11" Foreground="#424242"/>
+                                <TextBlock x:Name="TxtWireFrame" Text="Wire 0x300: ---" FontFamily="Consolas" FontSize="10" Foreground="#757575" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </GroupBox>
+            </StackPanel>
+        </ScrollViewer>
+
+        <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" Background="#E0E0E0"/>
+
+        <!-- Right Column: Live SPI ADC Readout + Scrolling ADC Waveform Plot -->
+        <Grid Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <panels:AdcPanel Grid.Row="0" x:Name="PanelAdc"/>
+
+            <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" Background="#E0E0E0"/>
+
+            <GroupBox Grid.Row="2" Header="Live ADC Waveform (mV) — CH0..CH4" FontWeight="Bold">
+                <Grid Margin="6" TextElement.FontWeight="Normal">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <CheckBox x:Name="ChkPlot0" Content="CH0 (A)" IsChecked="True" Foreground="#D32F2F" FontWeight="SemiBold" Margin="0,0,10,0" Checked="OnPlotFilterChanged" Unchecked="OnPlotFilterChanged"/>
+                            <CheckBox x:Name="ChkPlot1" Content="CH1 (B)" IsChecked="True" Foreground="#E65100" FontWeight="SemiBold" Margin="0,0,10,0" Checked="OnPlotFilterChanged" Unchecked="OnPlotFilterChanged"/>
+                            <CheckBox x:Name="ChkPlot2" Content="CH2 (C)" IsChecked="True" Foreground="#2E7D32" FontWeight="SemiBold" Margin="0,0,10,0" Checked="OnPlotFilterChanged" Unchecked="OnPlotFilterChanged"/>
+                            <CheckBox x:Name="ChkPlot3" Content="CH3 (D)" IsChecked="True" Foreground="#1565C0" FontWeight="SemiBold" Margin="0,0,10,0" Checked="OnPlotFilterChanged" Unchecked="OnPlotFilterChanged"/>
+                            <CheckBox x:Name="ChkPlot4" Content="CH4 (E)" IsChecked="True" Foreground="#6A1B9A" FontWeight="SemiBold" Checked="OnPlotFilterChanged" Unchecked="OnPlotFilterChanged"/>
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Clear Plot" Padding="10,3" Click="OnClearPlotClick"/>
+                    </Grid>
+
+                    <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="#E0E0E0" BorderThickness="1">
+                        <Canvas x:Name="CanvasAdcPlot" ClipToBounds="True" SizeChanged="OnCanvasSizeChanged"/>
+                    </Border>
+
+                    <TextBlock Grid.Row="2" x:Name="TxtAdcLatest" Text="Latest mV: ---" FontFamily="Consolas" FontSize="11"
+                               Foreground="#424242" Margin="0,4,0,0"/>
+                </Grid>
+            </GroupBox>
+        </Grid>
+    </Grid>
+</Window>

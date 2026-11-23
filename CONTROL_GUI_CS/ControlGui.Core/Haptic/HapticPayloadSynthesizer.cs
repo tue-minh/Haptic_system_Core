@@ -7,7 +7,7 @@ namespace ControlGui.Core.Haptic
         public double ContactThresh { get; set; } = 0.20;
         public double ForceThresh { get; set; } = 0.20;
         public double SlipMu { get; set; } = 0.50;
-        public double StaleSeconds { get; set; } = 0.10;
+        public double StaleSeconds { get; set; } = 0.25;
 
         private byte _counter = 0;
 
@@ -16,6 +16,17 @@ namespace ControlGui.Core.Haptic
             if (double.IsNaN(val) || double.IsInfinity(val) || val <= 0.0) return 0;
             long q = (long)Math.Round(val * 10.0);
             return (byte)Math.Clamp(q, 0, 255);
+        }
+
+        private bool IsFresh(Paxini.SensorReading? reading, double now)
+        {
+            if (reading == null) return false;
+            if (reading.T == 0.0 && reading.Epoch == 0.0) return true;
+            // PaxiniSensorWorker sets T = Stopwatch seconds (~0..3600) and Epoch = Unix UTC seconds (~1.7e9).
+            // When callers pass Unix UTC seconds as `now`, compare against Epoch instead of T.
+            double stamp = (now >= 1_000_000_000.0 && reading.Epoch > 0.0) ? reading.Epoch : reading.T;
+            if (stamp == 0.0) return true;
+            return (now - stamp) <= StaleSeconds;
         }
 
         public byte[] Synthesize(
@@ -27,8 +38,8 @@ namespace ControlGui.Core.Haptic
         {
             double now = nowSec ?? (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0);
 
-            bool freshL = left != null && (now - left.T <= StaleSeconds || left.T == 0);
-            bool freshR = right != null && (now - right.T <= StaleSeconds || right.T == 0);
+            bool freshL = IsFresh(left, now);
+            bool freshR = IsFresh(right, now);
 
             double fzL = freshL && left != null ? left.Fz : 0.0;
             double fxL = freshL && left != null ? left.Fx : 0.0;

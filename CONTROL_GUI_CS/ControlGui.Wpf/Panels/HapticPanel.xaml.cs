@@ -9,7 +9,6 @@ namespace ControlGui.Wpf.Panels
     {
         public event Action<bool>? EnabledChanged;
         public event Action? PingRequested;
-        public event Action? BandwidthSweepRequested;
 
         public bool IsStreamingEnabled => ChkEnable?.IsChecked == true;
 
@@ -26,11 +25,6 @@ namespace ControlGui.Wpf.Panels
         private void OnPingEsp32Click(object sender, RoutedEventArgs e)
         {
             PingRequested?.Invoke();
-        }
-
-        private void OnBandwidthSweepClick(object sender, RoutedEventArgs e)
-        {
-            BandwidthSweepRequested?.Invoke();
         }
 
         public void UpdateStatus(HapticSnapshot? snap, bool isStreaming, bool motorConnected)

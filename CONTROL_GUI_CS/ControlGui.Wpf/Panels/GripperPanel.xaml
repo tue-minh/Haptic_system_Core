@@ -95,10 +95,6 @@
                 <TextBlock Grid.Column="2" Text="Accel" VerticalAlignment="Center"/>
                 <TextBox Grid.Column="3" x:Name="TxtAccel" Text="30" ToolTip="Servo acceleration factor (10..200)" VerticalContentAlignment="Center"/>
             </Grid>
-
-            <Button x:Name="BtnTransitionExp" Content="Gripper Transition Experiment (Exp 2)..." Height="26" Margin="0,8,0,0"
-                    ToolTip="Slow-close the gripper while logging both PaXini sensors and all valve ADC channels."
-                    Click="OnTransitionExpClick"/>
         </StackPanel>
     </GroupBox>
 </UserControl>

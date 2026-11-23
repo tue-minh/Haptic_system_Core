@@ -27,8 +27,11 @@ namespace ControlGui.Wpf.Windows
 
         private GripperTransitionRunner? _runner;
         private MotorWorker? _ownMotor;
+        private Stm32HapticStreamer? _ownHapticStreamer;
         private SensorLink? _ownLeft;
         private SensorLink? _ownRight;
+        private bool _uiReady = false;
+        private bool _updatingServoUi = false;
 
         private static readonly Brush[] ValveBrushes =
         {
@@ -39,17 +42,21 @@ namespace ControlGui.Wpf.Windows
             Func<MotorWorker?> getMotor,
             Func<SensorLink?> getLeft,
             Func<SensorLink?> getRight,
-            Action<string>? log = null)
+            Action<string>? log = null,
+            GripperMotionMode initialMotionMode = GripperMotionMode.None)
         {
-            InitializeComponent();
             _getMotor = getMotor;
             _getLeft = getLeft;
             _getRight = getRight;
             _log = log ?? (_ => { });
+            InitializeComponent();
+            _uiReady = true;
 
+            SelectMotionMode(initialMotionMode);
+            string prefix = initialMotionMode == GripperMotionMode.None ? "gripper_transition" : "gripper_motion";
             TxtDbPath.Text = Path.Combine(
                 "recordings",
-                $"gripper_transition_{DateTime.Now:yyyyMMdd_HHmmss}.db");
+                $"{prefix}_{DateTime.Now:yyyyMMdd_HHmmss}.db");
 
             RefreshComPorts();
 
@@ -69,7 +76,7 @@ namespace ControlGui.Wpf.Windows
 
         private MotorWorker? ResolveMotor()
         {
-            var motor = _getMotor();
+            var motor = _getMotor?.Invoke();
             if (motor != null && motor.Snapshot().Connected) return motor;
             return _ownMotor;
         }
@@ -129,11 +136,29 @@ namespace ControlGui.Wpf.Windows
             RefreshComPorts();
         }
 
+        private void SyncOwnHapticStreamer(bool want)
+        {
+            if (want && _ownHapticStreamer == null && _ownMotor != null)
+            {
+                _ownHapticStreamer = new Stm32HapticStreamer(
+                    writer: bytes => _ownMotor?.WriteFrame(bytes) ?? 0,
+                    log: _log);
+                _ownHapticStreamer.Start();
+            }
+            else if (!want && _ownHapticStreamer != null)
+            {
+                _ownHapticStreamer.Stop();
+                _ownHapticStreamer.Dispose();
+                _ownHapticStreamer = null;
+            }
+        }
+
         private void OnMotorConnectClick(object sender, RoutedEventArgs e)
         {
             if (_ownMotor != null)
             {
                 _runner?.Stop();
+                SyncOwnHapticStreamer(false);
                 _ownMotor.Shutdown();
                 _ownMotor.Dispose();
                 _ownMotor = null;
@@ -204,6 +229,7 @@ namespace ControlGui.Wpf.Windows
 
         private void DisposeOwnConnections()
         {
+            SyncOwnHapticStreamer(false);
             if (_ownMotor != null)
             {
                 _ownMotor.Shutdown();
@@ -264,12 +290,16 @@ namespace ControlGui.Wpf.Windows
 
             if (File.Exists(Path.GetFullPath(cfg.DbPath)))
             {
+                string prefix = cfg.MotionMode == GripperMotionMode.None ? "gripper_transition" : "gripper_motion";
                 string fresh = Path.Combine(
                     Path.GetDirectoryName(cfg.DbPath) ?? "recordings",
-                    $"gripper_transition_{DateTime.Now:yyyyMMdd_HHmmss}.db");
+                    $"{prefix}_{DateTime.Now:yyyyMMdd_HHmmss}.db");
                 TxtDbPath.Text = fresh;
                 cfg = cfg with { DbPath = fresh };
             }
+
+            // Pause idle haptic streamer while the runner owns valve synthesis/streaming
+            SyncOwnHapticStreamer(false);
 
             _runner?.Stop();
             _runner?.Dispose();
@@ -286,6 +316,85 @@ namespace ControlGui.Wpf.Windows
         {
             _runner?.Stop();
             BtnStop.IsEnabled = false;
+        }
+
+        private byte GetServoId()
+        {
+            return byte.TryParse(TxtServoId?.Text, out var id) && id > 0 ? id : MotorConstants.DefaultServoId;
+        }
+
+        private void OnServoIdTextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (!_uiReady || _updatingServoUi) return;
+            var motor = ResolveMotor();
+            if (motor == null) return;
+            if (byte.TryParse(TxtServoId?.Text, out var id) && id > 0)
+            {
+                motor.SetServoId(id);
+            }
+        }
+
+        private void OnScanServoClick(object sender, RoutedEventArgs e)
+        {
+            ResolveMotor()?.ScanServo();
+        }
+
+        private void OnPingServoClick(object sender, RoutedEventArgs e)
+        {
+            ResolveMotor()?.PingServo(GetServoId());
+        }
+
+        private void SelectMotionMode(GripperMotionMode mode)
+        {
+            string tag = mode switch
+            {
+                GripperMotionMode.ZMinusReturn => "z_minus",
+                GripperMotionMode.XPlusReturn => "x_plus",
+                GripperMotionMode.YPlusReturn => "y_plus",
+                _ => "none"
+            };
+            foreach (ComboBoxItem item in CboMotionMode.Items)
+            {
+                if (string.Equals(item.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase))
+                {
+                    CboMotionMode.SelectedItem = item;
+                    break;
+                }
+            }
+        }
+
+        private GripperMotionMode GetSelectedMotionMode()
+        {
+            string tag = (CboMotionMode?.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "none";
+            return tag switch
+            {
+                "z_minus" => GripperMotionMode.ZMinusReturn,
+                "x_plus" => GripperMotionMode.XPlusReturn,
+                "y_plus" => GripperMotionMode.YPlusReturn,
+                _ => GripperMotionMode.None
+            };
+        }
+
+        private void OnMotionModeChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!_uiReady || TxtDbPath == null) return;
+            var mode = GetSelectedMotionMode();
+            string curName = Path.GetFileName(TxtDbPath.Text);
+            if (curName.StartsWith("gripper_transition_", StringComparison.OrdinalIgnoreCase) ||
+                curName.StartsWith("gripper_motion_", StringComparison.OrdinalIgnoreCase))
+            {
+                string prefix = mode == GripperMotionMode.None ? "gripper_transition" : "gripper_motion";
+                TxtDbPath.Text = Path.Combine(
+                    Path.GetDirectoryName(TxtDbPath.Text) ?? "recordings",
+                    $"{prefix}_{DateTime.Now:yyyyMMdd_HHmmss}.db");
+            }
+        }
+
+        private void OnStepEnableClick(object sender, RoutedEventArgs e)
+        {
+            var motor = ResolveMotor();
+            if (motor == null) return;
+            motor.Enable(!motor.Snapshot().Enabled);
         }
 
         private bool TryParseConfig(out GripperTransitionConfig cfg, out string error)
@@ -346,12 +455,45 @@ namespace ControlGui.Wpf.Windows
                 return false;
             }
 
+            var motionMode = GetSelectedMotionMode();
+            if (!double.TryParse(TxtMotionDist.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double motionDist) || motionDist <= 0 || motionDist > 200)
+            {
+                error = "Motion distance must be > 0 and <= 200 mm.";
+                return false;
+            }
+            if (!double.TryParse(TxtHoldTarget.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double holdTarget) || holdTarget < 0 || holdTarget > 120)
+            {
+                error = "Hold at target must be 0..120 s.";
+                return false;
+            }
+            if (!double.TryParse(TxtXyVel.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double xyVel) || xyVel < 1 || xyVel > 100)
+            {
+                error = "X/Y velocity must be 1..100 mm/s.";
+                return false;
+            }
+            if (!double.TryParse(TxtXyAccel.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double xyAccel) || xyAccel < 10 || xyAccel > 1000)
+            {
+                error = "X/Y acceleration must be 10..1000 mm/s^2.";
+                return false;
+            }
+            if (!double.TryParse(TxtZVel.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double zVel) || zVel < 1 || zVel > 50)
+            {
+                error = "Z velocity must be 1..50 mm/s.";
+                return false;
+            }
+            if (!double.TryParse(TxtZAccel.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double zAccel) || zAccel < 10 || zAccel > 1000)
+            {
+                error = "Z acceleration must be 10..1000 mm/s^2.";
+                return false;
+            }
+
             byte csIdx = Convert.ToByte(((ComboBoxItem)CboSpiCs.SelectedItem).Tag);
 
             string dbPath = TxtDbPath.Text.Trim();
             if (string.IsNullOrEmpty(dbPath))
             {
-                dbPath = Path.Combine("recordings", $"gripper_transition_{DateTime.Now:yyyyMMdd_HHmmss}.db");
+                string prefix = motionMode == GripperMotionMode.None ? "gripper_transition" : "gripper_motion";
+                dbPath = Path.Combine("recordings", $"{prefix}_{DateTime.Now:yyyyMMdd_HHmmss}.db");
                 TxtDbPath.Text = dbPath;
             }
 
@@ -364,6 +506,13 @@ namespace ControlGui.Wpf.Windows
                 SettleOpenSec = settle,
                 HoldCloseSec = hold,
                 ReleaseAtEnd = ChkRelease.IsChecked == true,
+                MotionMode = motionMode,
+                MotionDistanceMm = motionDist,
+                HoldAtTargetSec = holdTarget,
+                XyVelMmS = xyVel,
+                XyAccelMmS2 = xyAccel,
+                ZVelMmS = zVel,
+                ZAccelMmS2 = zAccel,
                 SampleRateHz = rateHz,
                 SpiCsIdx = csIdx,
                 VrefMv = vref,
@@ -390,9 +539,45 @@ namespace ControlGui.Wpf.Windows
             var motor = ResolveMotor();
             if (motor != null && motor.Snapshot().Connected)
             {
+                var ms = motor.Snapshot();
                 string where = externalConnected ? "main window" : "this window";
                 TxtComStatus.Text = $"STM32: connected ({motor.Port}, via {where})";
                 TxtComStatus.Foreground = Brushes.ForestGreen;
+
+                bool scanning = ms.ServoScanning;
+                BtnScanServo.IsEnabled = !scanning;
+                BtnPingServo.IsEnabled = !scanning;
+                BtnScanServo.Content = scanning ? "Scanning..." : "Scan ID";
+                TxtServoStatus.Text = ms.ServoStatusMsg;
+                TxtServoStatus.Foreground = ms.ServoOnline
+                    ? Brushes.ForestGreen
+                    : (scanning ? Brushes.DarkOrange : Brushes.Crimson);
+
+                if (TxtServoId != null && !TxtServoId.IsFocused && ms.ServoOnline && ms.ServoId > 0)
+                {
+                    string idStr = ms.ServoId.ToString();
+                    if (TxtServoId.Text != idStr)
+                    {
+                        _updatingServoUi = true;
+                        TxtServoId.Text = idStr;
+                        _updatingServoUi = false;
+                    }
+                }
+
+                if (_runner == null && ms.ServoOnline)
+                {
+                    TxtLivePos.Text = ms.ServoPos.ToString();
+                    TxtLiveLoad.Text = $"{ms.ServoLoadPct:F1}";
+                }
+
+                BtnStepEnable.IsEnabled = _runner == null || !_runner.GetStatus().Running;
+                BtnStepEnable.Content = ms.Enabled ? "Disable Stepper" : "Enable Stepper";
+                TxtStepperPos.Text = $"X{ms.X:+0.0;-0.0;+0.0} Y{ms.Y:+0.0;-0.0;+0.0} Z{ms.Z:+0.0;-0.0;+0.0} ({(ms.Enabled ? "ON" : "OFF")})";
+                TxtStepperPos.Foreground = ms.Enabled ? Brushes.ForestGreen : Brushes.DimGray;
+                if (_runner == null || !_runner.GetStatus().Running)
+                {
+                    TxtLiveStep.Text = $"{ms.X:+0.0;-0.0;0.0} {ms.Y:+0.0;-0.0;0.0} {ms.Z:+0.0;-0.0;0.0}";
+                }
             }
             else if (_ownMotor != null)
             {
@@ -401,11 +586,23 @@ namespace ControlGui.Wpf.Windows
                     ? $"STM32: connecting to {_ownMotor.Port}..."
                     : $"STM32: error — {ms.Error}";
                 TxtComStatus.Foreground = string.IsNullOrEmpty(ms.Error) ? Brushes.DarkOrange : Brushes.Crimson;
+                BtnScanServo.IsEnabled = false;
+                BtnPingServo.IsEnabled = false;
+                BtnStepEnable.IsEnabled = false;
+                TxtServoStatus.Text = "Offline";
+                TxtServoStatus.Foreground = Brushes.Gray;
+                TxtStepperPos.Text = "Stepper: ---";
             }
             else
             {
                 TxtComStatus.Text = "STM32: not connected — pick a port above and click Connect";
                 TxtComStatus.Foreground = Brushes.Gray;
+                BtnScanServo.IsEnabled = false;
+                BtnPingServo.IsEnabled = false;
+                BtnStepEnable.IsEnabled = false;
+                TxtServoStatus.Text = "Offline";
+                TxtServoStatus.Foreground = Brushes.Gray;
+                TxtStepperPos.Text = "Stepper: ---";
             }
 
             var externalL = _getLeft();
@@ -420,6 +617,11 @@ namespace ControlGui.Wpf.Windows
             string L = linkL == null ? "off" : (linkL.IsActive() ? $"{linkL.Port} {linkL.RateHz:F0} Hz" : linkL.State);
             string R = linkR == null ? "off" : (linkR.IsActive() ? $"{linkR.Port} {linkR.RateHz:F0} Hz" : linkR.State);
             TxtSensorStatus.Text = $"PaXini sensors: L={L}, R={R}";
+
+            bool runnerActive = _runner != null && _runner.GetStatus().Running;
+            bool wantIdleStreamer = !externalConnected && motor != null && motor.Snapshot().Connected && !runnerActive;
+            SyncOwnHapticStreamer(wantIdleStreamer);
+            _ownHapticStreamer?.UpdateSensors(ResolveLeft(), ResolveRight());
 
             if (_runner == null)
             {
@@ -464,6 +666,8 @@ namespace ControlGui.Wpf.Windows
                 TxtLiveRFz.Text = s.Right != null ? $"{s.Right.Fz:F2}" : "---";
                 double vmax = s.AdcMv.Where(v => !double.IsNaN(v)).DefaultIfEmpty(0).Max();
                 TxtLiveValve.Text = $"{vmax:F0}";
+                if (!double.IsNaN(s.StepX) && !double.IsNaN(s.StepZ))
+                    TxtLiveStep.Text = $"{s.StepX:+0.0;-0.0;0.0} {s.StepY:+0.0;-0.0;0.0} {s.StepZ:+0.0;-0.0;0.0}";
             }
 
             var samples = _runner.GetLiveSamples(600);

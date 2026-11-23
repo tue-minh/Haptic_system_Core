@@ -24,10 +24,21 @@ namespace ControlGui.Core.Haptic
         SettleOpen,
         Closing,
         Holding,
+        MovingOut,
+        HoldAtTarget,
+        Returning,
         Releasing,
         Done,
         Stopped,
         Error
+    }
+
+    public enum GripperMotionMode
+    {
+        None = 0,
+        ZMinusReturn = 1,
+        XPlusReturn = 2,
+        YPlusReturn = 3
     }
 
     public record GripperTransitionConfig
@@ -39,12 +50,20 @@ namespace ControlGui.Core.Haptic
         public double SettleOpenSec { get; init; } = 1.5;
         public double HoldCloseSec { get; init; } = 3.0;
         public bool ReleaseAtEnd { get; init; } = true;
+        public GripperMotionMode MotionMode { get; init; } = GripperMotionMode.None;
+        public double MotionDistanceMm { get; init; } = 10.0;
+        public double HoldAtTargetSec { get; init; } = 1.0;
+        public double XyVelMmS { get; init; } = 5.0;
+        public double XyAccelMmS2 { get; init; } = 50.0;
+        public double ZVelMmS { get; init; } = 2.0;
+        public double ZAccelMmS2 { get; init; } = 50.0;
         public double SampleRateHz { get; init; } = 50.0;
         public byte SpiCsIdx { get; init; } = 0;
         public byte SpiPeriodMs { get; init; } = 5;
         public double VrefMv { get; init; } = 3300.0;
         public double ForceThresholdN { get; init; } = 0.10;
         public double ValveThresholdMv { get; init; } = 25.0;
+        public bool StreamHapticValves { get; init; } = true;
         public string DbPath { get; init; } = "";
     }
 
@@ -60,7 +79,10 @@ namespace ControlGui.Core.Haptic
         ushort[] AdcRaw,
         double[] AdcMv,
         SensorReading? Left,
-        SensorReading? Right
+        SensorReading? Right,
+        double StepX = double.NaN,
+        double StepY = double.NaN,
+        double StepZ = double.NaN
     );
 
     public record GripperTransitionOnsets(
@@ -106,7 +128,10 @@ namespace ControlGui.Core.Haptic
         double? LeftOnsetSec,
         double? RightOnsetSec,
         double? ValveOnsetSec,
-        string DbPath
+        string DbPath,
+        double StepX = 0,
+        double StepY = 0,
+        double StepZ = 0
     );
 
     public sealed class GripperTransitionRunner : IDisposable
@@ -123,6 +148,7 @@ namespace ControlGui.Core.Haptic
         {
             "t_s", "epoch_s", "phase", "phase_t_s", "target_pos", "servo_pos",
             "servo_load_pct", "servo_volt_v",
+            "step_x_mm", "step_y_mm", "step_z_mm",
             "adc0_raw", "adc1_raw", "adc2_raw", "adc3_raw", "adc4_raw",
             "adc0_mv", "adc1_mv", "adc2_mv", "adc3_mv", "adc4_mv",
             "L_Fx_N", "L_Fy_N", "L_Fz_N", "L_Fmag_N", "L_Fshear_N", "L_mu",
@@ -138,6 +164,8 @@ namespace ControlGui.Core.Haptic
         private readonly Func<SensorReading?>? _getLeft;
         private readonly Func<SensorReading?>? _getRight;
         private readonly Action<string> _log;
+        private readonly HapticPayloadSynthesizer _synth = new();
+        private readonly TueBinaryEncoder _encoder = new();
         private readonly CancellationTokenSource _cts = new();
         private readonly BlockingCollection<GripperTransitionSample> _dbQueue = new();
         private readonly object _lock = new();
@@ -149,6 +177,7 @@ namespace ControlGui.Core.Haptic
         private Thread? _dbThread;
         private GripperTransitionOnsets? _onsets;
         private GripperTransitionStatus _status;
+        private int _lastServoPos;
 
         public GripperTransitionRunner(
             MotorWorker motor,
@@ -298,24 +327,56 @@ namespace ControlGui.Core.Haptic
                 SetStatus(s => s with { Running = true, State = "running", Error = "", Phase = GripperPhase.Opening.ToString() });
                 _log($"[gripper-exp] Started: open={_cfg.OpenPos}, close={_cfg.ClosePos}, speed={_cfg.Speed} steps/s, fs={sampleRate:F1} Hz -> {_cfg.DbPath}");
 
+                _lastServoPos = snap.ServoPos;
                 double travelSec = Math.Abs(_cfg.ClosePos - _cfg.OpenPos) / Math.Max(1.0, _cfg.Speed);
                 double moveTimeout = Math.Max(4.0, travelSec * 2.5 + 2.0);
 
                 // 1. Open fully and let the sensors settle at the baseline.
-                _motor.ServoMove(_cfg.OpenPos, _cfg.Speed, _cfg.Accel);
+                _motor.ServoMoveDirect(_cfg.OpenPos, _cfg.Speed, _cfg.Accel);
                 RunUntilReached(GripperPhase.Opening, _cfg.OpenPos, moveTimeout, st);
                 RunTimedPhase(GripperPhase.SettleOpen, _cfg.OpenPos, _cfg.SettleOpenSec, st);
 
                 // 2. Close at low velocity, sampling the whole transition.
-                _motor.ServoMove(_cfg.ClosePos, _cfg.Speed, _cfg.Accel);
-                RunUntilReached(GripperPhase.Closing, _cfg.ClosePos, moveTimeout, st);
+                _motor.ServoMoveDirect(_cfg.ClosePos, _cfg.Speed, _cfg.Accel);
+                RunUntilReached(GripperPhase.Closing, _cfg.ClosePos, moveTimeout, st, allowGripStall: true);
 
                 // 3. Hold the closed position so the settle/creep shows up.
                 RunTimedPhase(GripperPhase.Holding, _cfg.ClosePos, _cfg.HoldCloseSec, st);
 
+                // 4. Optional post-close stepper excursion (e.g., Z- then return Z, or X+ then return X).
+                if (_cfg.MotionMode != GripperMotionMode.None && !_cts.IsCancellationRequested)
+                {
+                    var origin = _motor.StepGetPosDirect() ?? (_motor.Snapshot().X, _motor.Snapshot().Y, _motor.Snapshot().Z);
+                    double x0 = origin.Item1, y0 = origin.Item2, z0 = origin.Item3;
+                    var (tx, ty, tz, velMmS, accelMmS2, isZ) = ResolveMotionTarget(x0, y0, z0);
+
+                    _motor.StepEnableDirect(true);
+                    ushort feed = (ushort)Math.Clamp(Math.Round(velMmS), 1, 200);
+                    ushort accel = (ushort)Math.Clamp(Math.Round(accelMmS2), 10, 2000);
+                    double dist = Math.Abs(_cfg.MotionDistanceMm);
+                    double stepTimeout = Math.Max(5.0, (dist / Math.Max(0.2, velMmS)) * 2.5 + 3.0);
+
+                    _log($"[gripper-exp] Stepper move ({_cfg.MotionMode}): origin=({x0:F2},{y0:F2},{z0:F2}) -> target=({tx:F2},{ty:F2},{tz:F2}) v={feed} mm/s a={accel} mm/s^2");
+                    IssueStepperMove(tx, ty, tz, feed, accel, isZ);
+                    RunUntilStepperIdle(GripperPhase.MovingOut, _cfg.ClosePos, tx, ty, tz, stepTimeout, st);
+
+                    if (!_cts.IsCancellationRequested && _cfg.HoldAtTargetSec > 0)
+                    {
+                        RunTimedPhase(GripperPhase.HoldAtTarget, _cfg.ClosePos, _cfg.HoldAtTargetSec, st);
+                    }
+
+                    if (!_cts.IsCancellationRequested)
+                    {
+                        _log($"[gripper-exp] Stepper return to origin=({x0:F2},{y0:F2},{z0:F2}) v={feed} mm/s a={accel} mm/s^2");
+                        IssueStepperMove(x0, y0, z0, feed, accel, isZ);
+                        RunUntilStepperIdle(GripperPhase.Returning, _cfg.ClosePos, x0, y0, z0, stepTimeout, st);
+                    }
+                }
+
+                // 5. Release gripper once back at starting stepper position.
                 if (_cfg.ReleaseAtEnd && !_cts.IsCancellationRequested)
                 {
-                    _motor.ServoMove(_cfg.OpenPos, _cfg.Speed, _cfg.Accel);
+                    _motor.ServoMoveDirect(_cfg.OpenPos, _cfg.Speed, _cfg.Accel);
                     RunUntilReached(GripperPhase.Releasing, _cfg.OpenPos, moveTimeout, st);
                 }
 
@@ -342,6 +403,15 @@ namespace ControlGui.Core.Haptic
             }
             finally
             {
+                if (_cts.IsCancellationRequested && _cfg.MotionMode != GripperMotionMode.None)
+                {
+                    _motor.StepStopDirect();
+                }
+                if (_cfg.StreamHapticValves)
+                {
+                    try { _motor.WriteFrame(_encoder.Encode(new byte[8])); }
+                    catch { }
+                }
                 if (pollingPaused) _motor.SetPollingPaused(false);
                 try { _dbQueue.CompleteAdding(); } catch (ObjectDisposedException) { }
                 _dbThread?.Join(3000);
@@ -356,6 +426,58 @@ namespace ControlGui.Core.Haptic
             }
         }
 
+        private (double X, double Y, double Z, double Vel, double Accel, bool IsZ) ResolveMotionTarget(double x0, double y0, double z0)
+        {
+            double d = Math.Abs(_cfg.MotionDistanceMm);
+            return _cfg.MotionMode switch
+            {
+                GripperMotionMode.ZMinusReturn => (x0, y0, z0 - d, _cfg.ZVelMmS, _cfg.ZAccelMmS2, true),
+                GripperMotionMode.XPlusReturn => (x0 + d, y0, z0, _cfg.XyVelMmS, _cfg.XyAccelMmS2, false),
+                GripperMotionMode.YPlusReturn => (x0, y0 + d, z0, _cfg.XyVelMmS, _cfg.XyAccelMmS2, false),
+                _ => (x0, y0, z0, _cfg.XyVelMmS, _cfg.XyAccelMmS2, false),
+            };
+        }
+
+        private void IssueStepperMove(double x, double y, double z, ushort feedMmS, ushort accelMmS2, bool isZ)
+        {
+            if (isZ)
+                _motor.StepMoveZDirect(z, feedMmS, accelMmS2);
+            else
+                _motor.StepMoveXYDirect(x, y, feedMmS, accelMmS2);
+        }
+
+        private void RunUntilStepperIdle(
+            GripperPhase phase,
+            int targetServoPos,
+            double targetX,
+            double targetY,
+            double targetZ,
+            double timeoutSec,
+            LoopCounters st)
+        {
+            double start = st.Sw.Elapsed.TotalSeconds;
+            int idleStable = 0;
+            SamplePhase(phase, targetServoPos, st, s =>
+            {
+                double elapsed = st.Sw.Elapsed.TotalSeconds - start;
+                if (elapsed >= timeoutSec) return true;
+
+                var status = _motor.StepGetStatusDirect();
+                bool nearTarget =
+                    !double.IsNaN(s.StepX) &&
+                    Math.Abs(s.StepX - targetX) <= 0.15 &&
+                    Math.Abs(s.StepY - targetY) <= 0.15 &&
+                    Math.Abs(s.StepZ - targetZ) <= 0.15;
+
+                if (status != null && !status.IsBusy && (nearTarget || elapsed >= 0.50))
+                    idleStable++;
+                else
+                    idleStable = 0;
+
+                return idleStable >= 2;
+            });
+        }
+
         private void RunTimedPhase(GripperPhase phase, int target, double durationSec, LoopCounters st)
         {
             double start = st.Sw.Elapsed.TotalSeconds;
@@ -363,15 +485,32 @@ namespace ControlGui.Core.Haptic
                 (st.Sw.Elapsed.TotalSeconds - start) >= durationSec);
         }
 
-        private void RunUntilReached(GripperPhase phase, int target, double timeoutSec, LoopCounters st)
+        private void RunUntilReached(GripperPhase phase, int target, double timeoutSec, LoopCounters st, bool allowGripStall = false)
         {
             double start = st.Sw.Elapsed.TotalSeconds;
             int stable = 0;
+            int stallStable = 0;
+            int prevPos = _lastServoPos;
             SamplePhase(phase, target, st, s =>
             {
+                double elapsed = st.Sw.Elapsed.TotalSeconds - start;
                 if (Math.Abs(s.ServoPos - target) <= 6) stable++;
                 else stable = 0;
-                return stable >= 2 || (st.Sw.Elapsed.TotalSeconds - start) >= timeoutSec;
+
+                if (allowGripStall && elapsed >= 0.6)
+                {
+                    bool stoppedMoving = Math.Abs(s.ServoPos - prevPos) <= 1;
+                    bool hasContactOrLoad =
+                        (s.Left?.FMag ?? 0) >= _cfg.ForceThresholdN ||
+                        (s.Right?.FMag ?? 0) >= _cfg.ForceThresholdN ||
+                        (!double.IsNaN(s.ServoLoadPct) && Math.Abs(s.ServoLoadPct) >= 40.0);
+                    if (stoppedMoving && hasContactOrLoad) stallStable++;
+                    else stallStable = 0;
+                }
+                prevPos = s.ServoPos;
+
+                int stallThreshold = Math.Max(10, (int)Math.Round(0.5 * Math.Clamp(_cfg.SampleRateHz, 5, 200)));
+                return stable >= 2 || (allowGripStall && stallStable >= stallThreshold) || elapsed >= timeoutSec;
             });
         }
 
@@ -440,16 +579,42 @@ namespace ControlGui.Core.Haptic
             }
 
             var fb = ServoFeedbackSafe();
-            int servoPos = fb?.Dynamics.Position ?? _motor.Snapshot().ServoPos;
+            if (fb != null) _lastServoPos = fb.Dynamics.Position;
+            int servoPos = fb?.Dynamics.Position ?? _lastServoPos;
             double loadPct = fb?.Dynamics.LoadPercent ?? double.NaN;
             double voltV = fb?.Health.VoltageV ?? double.NaN;
+
+            double stepX = double.NaN, stepY = double.NaN, stepZ = double.NaN;
+            if (_cfg.MotionMode != GripperMotionMode.None)
+            {
+                var stepPos = _motor.StepGetPosDirect();
+                if (stepPos.HasValue)
+                {
+                    stepX = stepPos.Value.X;
+                    stepY = stepPos.Value.Y;
+                    stepZ = stepPos.Value.Z;
+                }
+            }
+
+            var left = SafeRead(_getLeft);
+            var right = SafeRead(_getRight);
+
+            if (_cfg.StreamHapticValves)
+            {
+                double nowForSynth = ((left?.Epoch ?? 0.0) >= 1_000_000_000.0 || (right?.Epoch ?? 0.0) >= 1_000_000_000.0)
+                    ? epoch
+                    : Math.Max(left?.T ?? 0.0, right?.T ?? 0.0);
+                byte[] payload = _synth.Synthesize(left, right, slipAlert: false, tareActive: false, nowSec: nowForSynth);
+                _motor.WriteFrame(_encoder.Encode(payload));
+            }
 
             var sample = new GripperTransitionSample(
                 t, epoch, phase, phaseT, target,
                 servoPos, loadPct, voltV,
                 raw, mv,
-                SafeRead(_getLeft),
-                SafeRead(_getRight));
+                left,
+                right,
+                stepX, stepY, stepZ);
 
             if (!_dbQueue.IsAddingCompleted)
             {
@@ -502,7 +667,10 @@ namespace ControlGui.Core.Haptic
                 ServoLoadPct = double.IsNaN(sample.ServoLoadPct) ? 0 : sample.ServoLoadPct,
                 ValveMv = (double[])sample.AdcMv.Clone(),
                 LeftFmag = sample.Left?.FMag ?? 0,
-                RightFmag = sample.Right?.FMag ?? 0
+                RightFmag = sample.Right?.FMag ?? 0,
+                StepX = double.IsNaN(sample.StepX) ? s.StepX : sample.StepX,
+                StepY = double.IsNaN(sample.StepY) ? s.StepY : sample.StepY,
+                StepZ = double.IsNaN(sample.StepZ) ? s.StepZ : sample.StepZ
             });
         }
 
@@ -633,6 +801,13 @@ namespace ControlGui.Core.Haptic
                 ["settle_open_sec"] = _cfg.SettleOpenSec.ToString(CultureInfo.InvariantCulture),
                 ["hold_close_sec"] = _cfg.HoldCloseSec.ToString(CultureInfo.InvariantCulture),
                 ["release_at_end"] = _cfg.ReleaseAtEnd ? "1" : "0",
+                ["motion_mode"] = _cfg.MotionMode.ToString(),
+                ["motion_distance_mm"] = _cfg.MotionDistanceMm.ToString(CultureInfo.InvariantCulture),
+                ["hold_at_target_sec"] = _cfg.HoldAtTargetSec.ToString(CultureInfo.InvariantCulture),
+                ["xy_vel_mm_s"] = _cfg.XyVelMmS.ToString(CultureInfo.InvariantCulture),
+                ["xy_accel_mm_s2"] = _cfg.XyAccelMmS2.ToString(CultureInfo.InvariantCulture),
+                ["z_vel_mm_s"] = _cfg.ZVelMmS.ToString(CultureInfo.InvariantCulture),
+                ["z_accel_mm_s2"] = _cfg.ZAccelMmS2.ToString(CultureInfo.InvariantCulture),
                 ["sample_rate_hz"] = _cfg.SampleRateHz.ToString(CultureInfo.InvariantCulture),
                 ["spi_bus_id"] = "1",
                 ["spi_cs_idx"] = _cfg.SpiCsIdx.ToString(CultureInfo.InvariantCulture),
@@ -703,13 +878,16 @@ namespace ControlGui.Core.Haptic
             p[5].Value = s.ServoPos;
             p[6].Value = Db(s.ServoLoadPct);
             p[7].Value = Db(s.ServoVoltV);
+            p[8].Value = Db(s.StepX);
+            p[9].Value = Db(s.StepY);
+            p[10].Value = Db(s.StepZ);
 
             for (int c = 0; c < 5; c++)
-                p[8 + c].Value = s.AdcRaw != null && c < s.AdcRaw.Length ? (int)s.AdcRaw[c] : DBNull.Value;
+                p[11 + c].Value = s.AdcRaw != null && c < s.AdcRaw.Length ? (int)s.AdcRaw[c] : DBNull.Value;
             for (int c = 0; c < 5; c++)
-                p[13 + c].Value = Db(s.AdcMv != null && c < s.AdcMv.Length ? s.AdcMv[c] : double.NaN);
+                p[16 + c].Value = Db(s.AdcMv != null && c < s.AdcMv.Length ? s.AdcMv[c] : double.NaN);
 
-            int i = 18;
+            int i = 21;
             i = BindSensor(p, i, s.Left);
             BindSensor(p, i, s.Right);
         }

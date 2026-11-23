@@ -767,6 +767,24 @@ namespace ControlGui.Core.TueUsb
             return Decoders.StepPosZ(resp.Payload);
         }
 
+        public void StepSetSpeed(ushort defaultFeedMmS, ushort defaultAccelMmS2)
+        {
+            Transact(new Frame(FrameType.Req, CanId.StepSetSpeed,
+                Encoders.StepSetSpeed(defaultFeedMmS, defaultAccelMmS2)));
+        }
+
+        public void StepMoveXY(double xMm, double yMm)
+        {
+            Transact(new Frame(FrameType.Req, CanId.StepMoveXY,
+                Encoders.StepMoveXY(xMm, yMm)));
+        }
+
+        public void StepMoveZ(double zMm, ushort feedMmS, ushort accelMmS2)
+        {
+            Transact(new Frame(FrameType.Req, CanId.StepMoveZ,
+                Encoders.StepMoveZ(zMm, feedMmS, accelMmS2)));
+        }
+
         public void StepJogXY(double vxMmS, double vyMmS, double accelMmS2 = 300.0)
         {
             Transact(new Frame(FrameType.Req, CanId.StepJogXY,

@@ -134,6 +134,107 @@ namespace ControlGui.Core.Motor
             }
         }
 
+        public StepperStatus? StepGetStatusDirect()
+        {
+            var c = _client;
+            if (c == null) return null;
+            lock (_clientIoLock)
+            {
+                try { return c.StepGetStatus(); }
+                catch { return null; }
+            }
+        }
+
+        public (double X, double Y, double Z)? StepGetPosDirect()
+        {
+            var c = _client;
+            if (c == null) return null;
+            lock (_clientIoLock)
+            {
+                try
+                {
+                    var (x, y) = c.StepGetPosXY();
+                    double z = c.StepGetPosZ();
+                    return (x, y, z);
+                }
+                catch { return null; }
+            }
+        }
+
+        public bool StepEnableDirect(bool enable)
+        {
+            var c = _client;
+            if (c == null) return false;
+            lock (_clientIoLock)
+            {
+                try
+                {
+                    bool res = c.StepEnable(enable);
+                    Update(s => s with { Enabled = res });
+                    return res;
+                }
+                catch { return false; }
+            }
+        }
+
+        public void StepMoveXYDirect(double xMm, double yMm, ushort feedMmS, ushort accelMmS2)
+        {
+            var c = _client;
+            if (c == null) return;
+            lock (_clientIoLock)
+            {
+                c.StepSetSpeed(feedMmS, accelMmS2);
+                c.StepMoveXY(xMm, yMm);
+            }
+        }
+
+        public void StepMoveZDirect(double zMm, ushort feedMmS, ushort accelMmS2)
+        {
+            var c = _client;
+            if (c == null) return;
+            lock (_clientIoLock)
+            {
+                c.StepMoveZ(zMm, feedMmS, accelMmS2);
+            }
+        }
+
+        public void StepStopDirect()
+        {
+            var c = _client;
+            if (c == null) return;
+            lock (_clientIoLock)
+            {
+                try { c.StepStop(); }
+                catch { }
+            }
+        }
+
+        public void ServoMoveDirect(int pos, int speed = 800, int accel = 30, byte? sid = null)
+        {
+            var c = _client;
+            if (c == null) return;
+            byte targetId = sid ?? _servoId;
+            pos = Math.Clamp(pos, MotorConstants.GripperPosMin, MotorConstants.GripperPosMax);
+            speed = Math.Clamp(speed, MotorConstants.GripperSpeedMin, MotorConstants.GripperSpeedMax);
+            accel = Math.Clamp(accel, MotorConstants.GripperAccelMin, MotorConstants.GripperAccelMax);
+
+            lock (_clientIoLock)
+            {
+                try
+                {
+                    Thread.Sleep(5);
+                    try { c.ServoTorqueEnable(targetId, true); }
+                    catch { }
+                    Thread.Sleep(5);
+                    c.ServoSetPos(targetId, pos, speed, accel);
+                }
+                catch (Exception ex)
+                {
+                    _log($"[motor {Port}] ServoMoveDirect error: {ex.Message}");
+                }
+            }
+        }
+
         public int WriteFrame(byte[] frame)
         {
             if (Mock)

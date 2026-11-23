@@ -59,6 +59,7 @@ typedef struct __attribute__((packed))
 #define ADC_OFFSET_COUNTS     (((ADC_OFFSET_MV * ADC_MAX_COUNT) + (ADC_REF_MV / 2U)) / ADC_REF_MV)
 #define ADC_FILTER_LEN        8U
 #define ADC_SAMPLE_PERIOD_MS  10U
+#define ADC_BUSY_TIMEOUT_MS   50U
 #define DEFAULT_LOG_PERIOD_MS 50U
 #define MIN_LOG_PERIOD_MS     20U
 #define MAX_LOG_PERIOD_MS     10000U
@@ -90,6 +91,8 @@ static volatile uint8_t  adc_seq = 0U;
 static volatile uint32_t adc_sample_count = 0U;
 static volatile uint32_t adc_error_count = 0U;
 static volatile uint8_t  adc_last_error = 0U;
+static volatile uint32_t adc_last_ok_tick = 0U;
+static uint8_t           adc_timeout_streak = 0U;
 
 static uint8_t           spi_tx_buf[SPI_FRAME_SIZE];
 static uint8_t           spi_rx_buf[SPI_FRAME_SIZE];
@@ -98,8 +101,6 @@ static volatile uint8_t  spi_frame_front = 0U;
 static volatile uint8_t  spi_adc_dirty = 0U;
 static volatile uint8_t  spi_cs_active = 0U;
 static volatile uint8_t  spi_cs_restart_pending = 0U;
-static volatile uint16_t spi_tx_idx = 0U;
-static volatile uint16_t spi_rx_idx = 0U;
 static volatile uint32_t spi_tx_count = 0U;
 static volatile uint32_t spi_error_count = 0U;
 static volatile uint32_t spi_resync_count = 0U;
@@ -122,8 +123,8 @@ static uint32_t          log_period_ms = DEFAULT_LOG_PERIOD_MS;
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 static void SPI1_PackFrame(uint8_t *buf);
-static void SPI1_RearmSlaveDMA(void);
-static void SPI1_ServiceCompletedFrame(void);
+static void SPI1_StartSlaveDMA(void);
+static void SPI1_RecoverIdle(void);
 static void UART1_StartRxDMA(void);
 static uint8_t UART1_SendDMA(const char *msg, uint32_t wait_timeout_ms);
 static void ITV_LogSample(const uint16_t raw[ITV_CH_COUNT], uint32_t timestamp_ms, uint8_t wait_tx);
@@ -158,32 +159,12 @@ static void SPI1_PackFrame(uint8_t *buf)
   memcpy(buf, &frame, sizeof(frame));
 }
 
-static void SPI1_RearmSlaveDMA(void)
+/*
+ * Arm SPI1 slave DMA from the latest double-buffered shadow frame.
+ * Called from the CS falling-edge EXTI ISR (priority 0) while hspi1 is READY.
+ */
+static void SPI1_StartSlaveDMA(void)
 {
-  if ((spi_cs_active != 0U) && (hspi1.State != HAL_SPI_STATE_READY))
-  {
-    return;
-  }
-  if (hspi1.State != HAL_SPI_STATE_READY)
-  {
-    (void)HAL_SPI_Abort(&hspi1);
-  }
-  /* Hardware-reset SPI1 when idle (CS HIGH) so any stray SCK/NSS glitch
-   * that shifted the internal bit counter cannot wedge subsequent frames. */
-  if (spi_cs_active == 0U)
-  {
-    __HAL_RCC_SPI1_FORCE_RESET();
-    __NOP();
-    __NOP();
-    __NOP();
-    __NOP();
-    __HAL_RCC_SPI1_RELEASE_RESET();
-    if (HAL_SPI_Init(&hspi1) != HAL_OK)
-    {
-      spi_error_count++;
-      return;
-    }
-  }
   __HAL_SPI_CLEAR_OVRFLAG(&hspi1);
   memcpy(spi_tx_buf, spi_frame_shadow[spi_frame_front], SPI_FRAME_SIZE);
   spi_adc_dirty = 0U;
@@ -191,41 +172,84 @@ static void SPI1_RearmSlaveDMA(void)
   if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
   {
     spi_error_count++;
+    spi_cs_restart_pending = 1U;
   }
 }
 
-/*
- * Re-arm after a completed frame.
- *
- * Runs in DMA/SPI interrupt context, so it must not block. HAL's completion
- * handler has already waited for BSY and set State back to READY by the time
- * this is called; if it did NOT (a stale error), arming again here would fail
- * and silently wedge the link, so fall back to the deferred restart in the
- * main loop instead.
- */
-static void SPI1_ServiceCompletedFrame(void)
+static void ADC1_Recover(void)
 {
-  if (hspi1.State != HAL_SPI_STATE_READY)
+  (void)HAL_ADC_Stop_DMA(&hadc1);
+  if (hadc1.DMA_Handle != NULL)
   {
-    spi_cs_restart_pending = 1U;
+    (void)HAL_DMA_Abort(hadc1.DMA_Handle);
+    __HAL_UNLOCK(hadc1.DMA_Handle);
+    hadc1.DMA_Handle->State = HAL_DMA_STATE_READY;
+  }
+  __HAL_UNLOCK(&hadc1);
+  __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_EOC | ADC_FLAG_STRT | ADC_FLAG_JEOC | ADC_FLAG_JSTRT | ADC_FLAG_AWD);
+
+  adc_timeout_streak++;
+  if (adc_timeout_streak >= 2U)
+  {
+    __HAL_RCC_ADC1_FORCE_RESET();
+    __NOP();
+    __NOP();
+    __NOP();
+    __NOP();
+    __HAL_RCC_ADC1_RELEASE_RESET();
+    MX_ADC1_Init();
+    (void)HAL_ADCEx_Calibration_Start(&hadc1);
+    adc_timeout_streak = 0U;
+  }
+
+  adc_busy = 0U;
+  adc_error_count++;
+  adc_last_error = 1U;
+}
+
+/*
+ * Recover SPI1 from an incomplete/aborted transfer once CS has returned HIGH.
+ * Runs in thread context because HAL_SPI_Abort() polls HAL_GetTick().
+ * Masks EXTI9_5_IRQn during reset/re-init so a fresh CS edge cannot race it.
+ */
+static void SPI1_RecoverIdle(void)
+{
+  HAL_NVIC_DisableIRQ(EXTI9_5_IRQn);
+  if (HAL_GPIO_ReadPin(SPI1_NSS_GPIO_Port, SPI1_NSS_Pin) == GPIO_PIN_RESET)
+  {
+    spi_cs_active = 1U;
+    HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
     return;
   }
-  /* If CS is still LOW (one-frame-per-CS protocol), wait for CS rising edge
-   * before arming the next frame so we never have to HAL_SPI_Abort() a
-   * pre-armed transfer when CS deasserts. */
-  if (spi_cs_active != 0U)
+  spi_cs_active = 0U;
+
+  if (hspi1.State != HAL_SPI_STATE_READY)
   {
+    (void)HAL_SPI_Abort(&hspi1);
+    spi_resync_count++;
+  }
+  __HAL_RCC_SPI1_FORCE_RESET();
+  __NOP();
+  __NOP();
+  __NOP();
+  __NOP();
+  __HAL_RCC_SPI1_RELEASE_RESET();
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
+    spi_error_count++;
+    HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
     return;
   }
   __HAL_SPI_CLEAR_OVRFLAG(&hspi1);
-  memcpy(spi_tx_buf, spi_frame_shadow[spi_frame_front], SPI_FRAME_SIZE);
-  spi_adc_dirty = 0U;
+  __HAL_SPI_DISABLE(&hspi1);
 
-  if (HAL_SPI_TransmitReceive_DMA(&hspi1, spi_tx_buf, spi_rx_buf, SPI_FRAME_SIZE) != HAL_OK)
+  __HAL_GPIO_EXTI_CLEAR_IT(SPI1_NSS_Pin);
+  if (HAL_GPIO_ReadPin(SPI1_NSS_GPIO_Port, SPI1_NSS_Pin) == GPIO_PIN_RESET)
   {
-    spi_error_count++;
-    spi_cs_restart_pending = 1U;
+    spi_cs_active = 1U;
+    SPI1_StartSlaveDMA();
   }
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 }
 
 static uint32_t ITV_RawToMillivolts(uint16_t raw)
@@ -453,24 +477,31 @@ int main(void)
 
   UART1_StartRxDMA();
   (void)UART1_SendDMA(
-      "\r\nITV_SLAVE_READY: ADC1 5ch(PA0-PA4) | USART1 115200 | SPI1 Slave 16B DMA+IRQ\r\n",
+      "\r\nITV_SLAVE_READY: ADC1 5ch(PA0-PA4) | USART1 115200 | SPI1 Slave 14B DMA+EXTI\r\n",
       50U);
 
   SPI1_PackFrame(spi_frame_shadow[0]);
   spi_frame_front = 0U;
   /* Keep SPI1 disabled (SPE = 0) while CS is HIGH so SCK glitches cannot
-   * shift bits between frames; EXTI falling edge enables it per transfer. */
-  SPI1->CR2 = 0U;
-  SPI1->CR1 = SPI_CR1_SSM;
+   * shift bits between frames; EXTI falling edge arms DMA per transfer. */
+  __HAL_SPI_DISABLE(&hspi1);
 
   uint32_t last_sample_tick = HAL_GetTick();
   uint32_t last_log_tick = HAL_GetTick();
+  adc_last_ok_tick = last_sample_tick;
 
   adc_busy = 1U;
   if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_dma_buf, ITV_CH_COUNT) != HAL_OK)
   {
     adc_busy = 0U;
   }
+
+  /* Hardware IWDG (~500 ms @ 40 kHz LSI / 64): only kicked while ADC keeps completing */
+  IWDG->KR = 0x5555U;
+  IWDG->PR = 4U;    /* prescaler /64 (~625 Hz) */
+  IWDG->RLR = 312U; /* ~500 ms */
+  IWDG->KR = 0xAAAAU;
+  IWDG->KR = 0xCCCCU;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -484,34 +515,37 @@ int main(void)
       ITV_ProcessCommand();
     }
 
-    if ((adc_busy == 0U) && ((now - last_sample_tick) >= ADC_SAMPLE_PERIOD_MS))
+    if ((adc_busy != 0U) && ((uint32_t)(now - last_sample_tick) >= ADC_BUSY_TIMEOUT_MS))
     {
+      ADC1_Recover();
+    }
+
+    if ((adc_busy == 0U) && ((uint32_t)(now - last_sample_tick) >= ADC_SAMPLE_PERIOD_MS))
+    {
+      if ((hadc1.DMA_Handle != NULL && hadc1.DMA_Handle->State != HAL_DMA_STATE_READY) ||
+          (hadc1.ErrorCode != HAL_ADC_ERROR_NONE))
+      {
+        (void)HAL_ADC_Stop_DMA(&hadc1);
+      }
       last_sample_tick = now;
       adc_busy = 1U;
       HAL_GPIO_TogglePin(led_GPIO_Port, led_Pin);
       if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc_dma_buf, ITV_CH_COUNT) != HAL_OK)
       {
-        adc_busy = 0U;
-        adc_error_count++;
-        adc_last_error = 1U;
+        ADC1_Recover();
       }
     }
 
-    if (spi_cs_restart_pending != 0U)
+    /* Kick IWDG only as long as ADC conversions are actually completing */
+    if ((uint32_t)(now - adc_last_ok_tick) < 350U)
+    {
+      IWDG->KR = 0xAAAAU;
+    }
+
+    if ((spi_cs_restart_pending != 0U) && (spi_cs_active == 0U))
     {
       spi_cs_restart_pending = 0U;
-      if (spi_cs_active == 0U)
-      {
-        if (hspi1.State != HAL_SPI_STATE_READY)
-        {
-          spi_resync_count++;
-        }
-        SPI1_RearmSlaveDMA();
-      }
-      else if (hspi1.State == HAL_SPI_STATE_READY)
-      {
-        SPI1_RearmSlaveDMA();
-      }
+      SPI1_RecoverIdle();
     }
 
     if ((stream_enabled != 0U) && (adc_data_ready != 0U) &&
@@ -625,10 +659,13 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
     adc_valid = 1U;
     adc_last_error = 0U;
     adc_sample_count++;
+    adc_last_ok_tick = HAL_GetTick();
+    adc_timeout_streak = 0U;
     adc_data_ready = 1U;
 
     uint8_t back = (uint8_t)(spi_frame_front ^ 1U);
     SPI1_PackFrame(spi_frame_shadow[back]);
+    __DMB();
     spi_frame_front = back;
     spi_adc_dirty = 1U;
     adc_busy = 0U;
@@ -650,7 +687,8 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
   if (hspi->Instance == SPI1)
   {
     spi_tx_count++;
-    SPI1_ServiceCompletedFrame();
+    __HAL_SPI_DISABLE(hspi);
+    spi_cs_restart_pending = 0U;
   }
 }
 
@@ -660,45 +698,8 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
   {
     spi_error_count++;
     __HAL_SPI_CLEAR_OVRFLAG(hspi);
-    if (hspi->State == HAL_SPI_STATE_READY)
-    {
-      SPI1_ServiceCompletedFrame();
-    }
-    else
-    {
-      spi_cs_restart_pending = 1U;
-    }
-  }
-}
-
-void SPI1_Slave_IRQHandler(void)
-{
-  uint32_t sr = SPI1->SR;
-  if ((sr & SPI_SR_RXNE) != 0U)
-  {
-    uint8_t rx = (uint8_t)SPI1->DR;
-    if (spi_rx_idx < SPI_FRAME_SIZE)
-    {
-      spi_rx_buf[spi_rx_idx++] = rx;
-    }
-  }
-  if ((sr & SPI_SR_TXE) != 0U)
-  {
-    if (spi_tx_idx < SPI_FRAME_SIZE)
-    {
-      SPI1->DR = spi_tx_buf[spi_tx_idx++];
-    }
-    else
-    {
-      SPI1->DR = 0x00U;
-      SPI1->CR2 &= ~SPI_CR2_TXEIE;
-    }
-  }
-  if ((sr & SPI_SR_OVR) != 0U)
-  {
-    (void)SPI1->DR;
-    (void)SPI1->SR;
-    spi_error_count++;
+    __HAL_SPI_DISABLE(hspi);
+    spi_cs_restart_pending = 1U;
   }
 }
 
@@ -709,32 +710,24 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     if (HAL_GPIO_ReadPin(SPI1_NSS_GPIO_Port, SPI1_NSS_Pin) == GPIO_PIN_RESET)
     {
       spi_cs_active = 1U;
-      /* Hard-reset SPI1 at CS falling edge so any prior glitch is cleared */
-      __HAL_RCC_SPI1_FORCE_RESET();
-      __NOP();
-      __NOP();
-      __HAL_RCC_SPI1_RELEASE_RESET();
-      SPI1->CR1 = SPI_CR1_SSM;
-      SPI1->CR2 = 0U;
-      memcpy(spi_tx_buf, spi_frame_shadow[spi_frame_front], SPI_FRAME_SIZE);
-      spi_tx_idx = 1U;
-      spi_rx_idx = 0U;
-      SPI1->DR = spi_tx_buf[0];
-      SPI1->CR2 = SPI_CR2_TXEIE | SPI_CR2_RXNEIE | SPI_CR2_ERRIE;
-      SPI1->CR1 = SPI_CR1_SSM | SPI_CR1_SPE;
+      if (hspi1.State == HAL_SPI_STATE_READY)
+      {
+        spi_cs_restart_pending = 0U;
+        SPI1_StartSlaveDMA();
+      }
+      else
+      {
+        spi_error_count++;
+        spi_cs_restart_pending = 1U;
+      }
     }
     else
     {
       spi_cs_active = 0U;
-      SPI1->CR2 = 0U;
-      SPI1->CR1 = SPI_CR1_SSM;
-      if (spi_rx_idx >= SPI_FRAME_SIZE)
+      __HAL_SPI_DISABLE(&hspi1);
+      if (hspi1.State != HAL_SPI_STATE_READY)
       {
-        spi_tx_count++;
-      }
-      else if (spi_rx_idx > 0U)
-      {
-        spi_resync_count++;
+        spi_cs_restart_pending = 1U;
       }
     }
   }
@@ -783,12 +776,16 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
+  for (uint8_t i = 0U; i < 6U; i++)
   {
-    HAL_GPIO_TogglePin(led_GPIO_Port, led_Pin); HAL_Delay(50);
+    HAL_GPIO_TogglePin(led_GPIO_Port, led_Pin);
+    for (volatile uint32_t d = 0U; d < 250000U; d++)
+    {
+      __NOP();
+    }
   }
+  NVIC_SystemReset();
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
