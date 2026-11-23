@@ -1,4 +1,4 @@
-D:/Project_VSCode/Haptic_system_Core/STM32_FIRMWARE/Core/Src/spi.c:31:6:MX_SPI1_Init	8	static
-D:/Project_VSCode/Haptic_system_Core/STM32_FIRMWARE/Core/Src/spi.c:63:6:MX_SPI3_Init	8	static
-D:/Project_VSCode/Haptic_system_Core/STM32_FIRMWARE/Core/Src/spi.c:95:6:HAL_SPI_MspInit	56	static
-D:/Project_VSCode/Haptic_system_Core/STM32_FIRMWARE/Core/Src/spi.c:164:6:HAL_SPI_MspDeInit	16	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/spi.c:33:6:MX_SPI1_Init	8	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/spi.c:65:6:MX_SPI3_Init	8	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/spi.c:97:6:HAL_SPI_MspInit	56	static
+C:/Users/nguye/OneDrive/Desktop/Control/STM32_FIRMWARE/Core/Src/spi.c:203:6:HAL_SPI_MspDeInit	16	static

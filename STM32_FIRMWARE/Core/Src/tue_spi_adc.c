@@ -14,6 +14,7 @@
 #include "spi.h"
 
 #define TUE_SPI_ADC_SPI_TIMEOUT_MS 100U
+#define TUE_SPI_ADC_CS_SETUP_US    50U
 
 typedef struct {
     SPI_HandleTypeDef *spi;
@@ -34,6 +35,8 @@ static uint8_t s_rx_burst[TUE_SPI_ADC_BURST_LEN];
 
 static bool               s_initialized  = false;
 static osThreadId_t       s_task         = NULL;
+static osSemaphoreId_t    s_spi_done_sem = NULL;
+static volatile uint8_t   s_spi_xfer_ok  = 0U;
 static volatile uint8_t   s_enabled      = 1U;
 static volatile uint8_t   s_cs_idx       = 0U;
 static volatile uint8_t   s_period_ms    = TUE_SPI_ADC_DEFAULT_PERIOD_MS;
@@ -73,16 +76,45 @@ static bool parse_frame(const uint8_t *buf, uint32_t len,
     return true;
 }
 
+static void dwt_enable(void)
+{
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+static void delay_us(uint32_t us)
+{
+    uint32_t start = DWT->CYCCNT;
+    uint32_t ticks = us * (SystemCoreClock / 1000000U);
+    while ((uint32_t)(DWT->CYCCNT - start) < ticks) {
+        __NOP();
+    }
+}
+
 static void cs_setup_delay(void)
 {
-    /* The slave re-arms its DMA from the completion ISR *after* HAL has
-     * busy-waited for BSY, so it needs real time between CS edges. The old
-     * 200 NOPs was ~1 us - shorter than one DMA IRQ entry plus
-     * HAL_SPI_TransmitReceive_DMA() on the 72 MHz F103, which dropped the first
-     * bytes of the frame. ~25 us (at 168 MHz, 3500 NOPs) leaves ample margin
-     * and is negligible against the 10 ms poll period. */
-    for (volatile uint32_t i = 0U; i < 3500U; i++) {
-        __NOP();
+    /* Wait a deterministic 50 us after CS falling edge so the F103 slave
+     * EXTI ISR can arm its SPI1 DMA with ample margin regardless of -O0/-O2. */
+    delay_us(TUE_SPI_ADC_CS_SETUP_US);
+}
+
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+    if (hspi->Instance == SPI1) {
+        s_spi_xfer_ok = 1U;
+        if (s_spi_done_sem != NULL) {
+            (void)osSemaphoreRelease(s_spi_done_sem);
+        }
+    }
+}
+
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
+{
+    if (hspi->Instance == SPI1) {
+        s_spi_xfer_ok = 0U;
+        if (s_spi_done_sem != NULL) {
+            (void)osSemaphoreRelease(s_spi_done_sem);
+        }
     }
 }
 
@@ -91,12 +123,26 @@ static bool poll_slave(uint8_t idx)
     const tue_spi_adc_slave_desc_t *desc = &s_slaves[idx];
 
     memset(s_tx_dummy, 0, sizeof(s_tx_dummy));
+    memset(s_rx_burst, 0, sizeof(s_rx_burst));
+
+    if (s_spi_done_sem != NULL) {
+        while (osSemaphoreAcquire(s_spi_done_sem, 0U) == osOK) {
+        }
+    }
+    s_spi_xfer_ok = 0U;
+
     HAL_GPIO_WritePin(desc->cs_port, desc->cs_pin, GPIO_PIN_RESET);
     cs_setup_delay();
 
-    HAL_StatusTypeDef st = HAL_SPI_TransmitReceive(
-        desc->spi, s_tx_dummy, s_rx_burst, TUE_SPI_ADC_BURST_LEN,
-        TUE_SPI_ADC_SPI_TIMEOUT_MS);
+    HAL_StatusTypeDef st = HAL_SPI_TransmitReceive_DMA(
+        desc->spi, s_tx_dummy, s_rx_burst, TUE_SPI_ADC_BURST_LEN);
+    if (st == HAL_OK) {
+        if ((s_spi_done_sem == NULL) ||
+            (osSemaphoreAcquire(s_spi_done_sem, TUE_SPI_ADC_SPI_TIMEOUT_MS) != osOK) ||
+            (s_spi_xfer_ok == 0U)) {
+            st = HAL_ERROR;
+        }
+    }
 
     HAL_GPIO_WritePin(desc->cs_port, desc->cs_pin, GPIO_PIN_SET);
     if (st != HAL_OK) {
@@ -144,6 +190,7 @@ static bool poll_slave(uint8_t idx)
 static void tue_spi_adc_task(void *argument)
 {
     (void)argument;
+    uint32_t next_tick = osKernelGetTickCount();
 
     for (;;) {
         uint8_t idx = s_cs_idx;
@@ -152,10 +199,16 @@ static void tue_spi_adc_task(void *argument)
         if ((s_enabled != 0U) && (idx < TUE_SPI_ADC_SLAVE_COUNT)) {
             (void)poll_slave(idx);
             s_total_frames++;
-            osDelay(period);
+            next_tick += period;
         } else {
-            osDelay(TUE_SPI_ADC_DEFAULT_PERIOD_MS);
+            next_tick += TUE_SPI_ADC_DEFAULT_PERIOD_MS;
         }
+
+        uint32_t now = osKernelGetTickCount();
+        if ((int32_t)(next_tick - now) <= 0) {
+            next_tick = now + ((s_enabled != 0U) ? period : TUE_SPI_ADC_DEFAULT_PERIOD_MS);
+        }
+        (void)osDelayUntil(next_tick);
     }
 }
 
@@ -164,6 +217,8 @@ bool tue_spi_adc_init(void)
     if (s_initialized) {
         return true;
     }
+
+    dwt_enable();
 
     for (uint32_t i = 0U; i < TUE_SPI_ADC_SLAVE_COUNT; i++) {
         HAL_GPIO_WritePin(s_slaves[i].cs_port, s_slaves[i].cs_pin, GPIO_PIN_SET);
@@ -175,13 +230,18 @@ bool tue_spi_adc_init(void)
     s_cs_idx     = 0U;
     s_period_ms  = TUE_SPI_ADC_DEFAULT_PERIOD_MS;
 
+    if (s_spi_done_sem == NULL) {
+        const osSemaphoreAttr_t sem_attr = { .name = "spi1_adc_done" };
+        s_spi_done_sem = osSemaphoreNew(1U, 0U, &sem_attr);
+    }
+
     const osThreadAttr_t task_attr = {
         .name = "tue_spi_adc",
         .stack_size = 2048,
-        .priority = (osPriority_t)osPriorityNormal,
+        .priority = (osPriority_t)osPriorityAboveNormal,
     };
     s_task = osThreadNew(tue_spi_adc_task, NULL, &task_attr);
-    s_initialized = (s_task != NULL);
+    s_initialized = (s_spi_done_sem != NULL) && (s_task != NULL);
     return s_initialized;
 }
 

@@ -239,15 +239,16 @@ static void usb_transmit(uint8_t frame_type, uint32_t can_id, uint8_t seq,
     }
 
     if (s_tx_mutex != NULL) {
-        if (osMutexAcquire(s_tx_mutex, 50U) != osOK) {
+        if (osMutexAcquire(s_tx_mutex, 100U) != osOK) {
             return; /* Mutex timeout */
         }
     }
 
     /* Event-driven synchronization: wait for previous transmission to complete.
-     * Unblocks immediately (0µs) when USB hardware triggers CDC_TransmitCplt_FS. */
+     * If the semaphore timed out during a USB reset/re-open (TxState == 0),
+     * allow recovery instead of permanently wedging the TX path. */
     if (s_tx_cplt_sem != NULL) {
-        if (osSemaphoreAcquire(s_tx_cplt_sem, 20U) != osOK) {
+        if ((osSemaphoreAcquire(s_tx_cplt_sem, 50U) != osOK) && (hcdc->TxState != 0U)) {
             if (s_tx_mutex != NULL) {
                 (void)osMutexRelease(s_tx_mutex);
             }
@@ -285,8 +286,16 @@ static void usb_transmit(uint8_t frame_type, uint32_t can_id, uint8_t seq,
     tx_buf[len - 2U] = TUE_USB_EOF1;
     tx_buf[len - 1U] = TUE_USB_EOF2;
 
-    if (CDC_Transmit_FS(tx_buf, len) != USBD_OK) {
-        /* Failed to initiate transfer: re-release semaphore so next sends don't hang */
+    uint8_t tx_res = CDC_Transmit_FS(tx_buf, len);
+    if (tx_res == USBD_BUSY) {
+        /* An IN transfer is still in flight; wait once for its completion ISR
+         * rather than releasing s_tx_cplt_sem prematurely. */
+        if ((s_tx_cplt_sem != NULL) && (osSemaphoreAcquire(s_tx_cplt_sem, 20U) == osOK)) {
+            tx_res = CDC_Transmit_FS(tx_buf, len);
+        }
+    }
+    if ((tx_res != USBD_OK) && (hcdc->TxState == 0U)) {
+        /* Endpoint is idle and no transfer started: restore semaphore token. */
         if (s_tx_cplt_sem != NULL) {
             (void)osSemaphoreRelease(s_tx_cplt_sem);
         }

@@ -190,3 +190,7 @@ D:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net
 D:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\BandwidthExperimentWindow.baml
 D:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Panels\AdcPanel.g.cs
 D:\Project_VSCode\Haptic_system_Core\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\BandwidthExperimentWindow.g.cs
+C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\GripperTransitionWindow.baml
+C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\GripperTransitionWindow.g.cs
+C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\ValveManualWindow.g.cs
+C:\Users\nguye\OneDrive\Desktop\Control\CONTROL_GUI_CS\ControlGui.Wpf\obj\Debug\net8.0-windows\Windows\ValveManualWindow.baml

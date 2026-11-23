@@ -3,6 +3,7 @@
     "defaultMode": "default",
     "allow": [
       "Edit(*)",
+      "Read(*)",
       "Shell(cmake *)",
       "Shell(dotnet *)",
       "Shell(python *)",
@@ -35,9 +36,6 @@
       "Shell(git reset --hard*)",
       "Shell(git push --force*)",
       "Shell(git push -f *)",
-      "Read(~/.ssh/**)",
-      "Read(~/.aws/**)",
-      "Read(~/.gnupg/**)",
       "Edit(~/.ssh/**)",
       "Edit(~/.aws/**)",
       "Edit(~/.gnupg/**)",
