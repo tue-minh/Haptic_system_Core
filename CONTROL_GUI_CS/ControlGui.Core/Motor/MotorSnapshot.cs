@@ -1,4 +1,5 @@
 using System;
+using ControlGui.Core.TueUsb;
 
 namespace ControlGui.Core.Motor
 {
@@ -37,6 +38,12 @@ namespace ControlGui.Core.Motor
         public string HapticPing { get; init; } = "";
         public bool HapticPingOk { get; init; } = false;
         public bool HapticPingPending { get; init; } = false;
+
+        public HapticMappingConfig? HapticMapping { get; init; } = null;
+        public string HapticMappingStatus { get; init; } = "";
+        public bool HapticMappingOk { get; init; } = false;
+        public bool HapticMappingPending { get; init; } = false;
+        public long HapticMappingSeq { get; init; } = 0;
 
         public bool AdcAvailable { get; init; } = false;
         public bool AdcUpdated { get; init; } = false;

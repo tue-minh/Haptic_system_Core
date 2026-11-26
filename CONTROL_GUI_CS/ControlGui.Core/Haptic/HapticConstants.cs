@@ -35,6 +35,7 @@ namespace ControlGui.Core.Haptic
         // MCP4725 Valve Voltage Simulation Parameters (matched to ESP32 firmware)
         public const double VMin = 0.70;
         public const double VMax = 2.20;
+        public const double VHwCeiling = 3.30;
         public const double ForceThresh = 0.20;
         public const double ForceRated = 20.00;
         public const double Vdd = 3.30;
@@ -42,14 +43,29 @@ namespace ControlGui.Core.Haptic
 
         public static double ComputeValveVoltage(double forceN)
         {
-            if (forceN <= ForceThresh)
+            return ComputeValveVoltage(forceN, VMin, VMax, ForceThresh, ForceRated);
+        }
+
+        public static double ComputeValveVoltage(
+            double forceN,
+            double vMin,
+            double vMax,
+            double forceThresh,
+            double forceRated)
+        {
+            vMin = Math.Clamp(vMin, 0.0, VHwCeiling);
+            vMax = Math.Clamp(vMax, vMin, VHwCeiling);
+            forceThresh = Math.Clamp(forceThresh, 0.0, 25.0);
+            forceRated = Math.Clamp(forceRated, forceThresh + 0.1, 25.5);
+
+            if (forceN <= forceThresh)
                 return 0.0;
 
-            double ratio = (forceN - ForceThresh) / (ForceRated - ForceThresh);
+            double ratio = (forceN - forceThresh) / (forceRated - forceThresh);
             ratio = Math.Clamp(ratio, 0.0, 1.0);
 
-            double vOut = VMin + (VMax - VMin) * ratio;
-            return Math.Min(vOut, VMax);
+            double vOut = vMin + (vMax - vMin) * ratio;
+            return Math.Min(vOut, vMax);
         }
 
         public static ushort VoltageToDac(double voltage)

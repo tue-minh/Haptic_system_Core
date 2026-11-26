@@ -88,6 +88,16 @@ namespace ControlGui.Wpf.Windows
                 _motor?.ReadSpiAdc();
             };
 
+            PanelMapping.ApplyRequested += (vMin, vMax, fThresh, fRated, saveEeprom) =>
+            {
+                _motor?.SetHapticMapping(vMin, vMax, fThresh, fRated, saveEeprom);
+            };
+            PanelMapping.ReadRequested += () =>
+            {
+                _motor?.ReadHapticMapping();
+            };
+            PanelMapping.MappingChanged += _ => RefreshValveMetas();
+
             _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
             _uiTimer.Tick += OnUiTick;
             _uiTimer.Start();
@@ -241,9 +251,23 @@ namespace ControlGui.Wpf.Windows
             }
             row.Updating = false;
 
+            UpdateRowMeta(row, pct);
+        }
+
+        private void RefreshValveMetas()
+        {
+            foreach (var row in _valveRows)
+            {
+                if (row == null) continue;
+                UpdateRowMeta(row, row.Slider.Value);
+            }
+        }
+
+        private void UpdateRowMeta(ValveRowUi row, double pct)
+        {
             byte uByte = PctToWireByte(pct);
             double forceN = uByte * HapticConstants.ForceLsbN;
-            double vDac = HapticConstants.ComputeValveVoltage(forceN);
+            double vDac = PanelMapping.CurrentConfig.ComputeVoltage(forceN);
             row.TxtMeta.Text = $"Byte: {uByte,3} | F: {forceN,4:F1} N | DAC: {vDac:F2} V";
         }
 
@@ -492,6 +516,7 @@ namespace ControlGui.Wpf.Windows
         {
             var snap = _motor?.Snapshot();
             PanelAdc.Update(snap);
+            PanelMapping.UpdateFromMotor(snap);
 
             bool connected = snap != null && snap.Connected;
             BtnPingEsp32.IsEnabled = connected;

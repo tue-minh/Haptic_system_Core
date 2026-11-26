@@ -108,6 +108,13 @@ namespace ControlGui.Core.TueUsb
         private readonly double[] _mockPlantV = new double[5];
         private double _mockPlantLastT = -1.0;
 
+        // Simulated ESP32 force->voltage mapping config (0x304 / 0x305)
+        private ushort _mockMapVMinMv = 700;
+        private ushort _mockMapVMaxMv = 2200;
+        private ushort _mockMapFThreshCn = 20;
+        private ushort _mockMapFRatedCn = 2000;
+        private bool _mockMapSavedEeprom = false;
+
         public Action<Frame>? OnTx { get; set; }
         public Action<Frame>? OnRx { get; set; }
         public Action<Frame>? OnAsync { get; set; }
@@ -509,6 +516,28 @@ namespace ControlGui.Core.TueUsb
                 byte[] payload = new byte[] { 0x0B, 0, 0, 0, 0, 0, 0, 0 };
                 res.Add(new Frame(FrameType.RespOk, id, payload, seq));
             }
+            else if (id == CanId.HapticSetCfg)
+            {
+                if (p.Length >= 8)
+                {
+                    ushort raw0 = BinaryPrimitives.ReadUInt16LittleEndian(p.AsSpan(0, 2));
+                    bool save = (raw0 & 0x8000) != 0;
+                    ushort vmin = (ushort)Math.Clamp((int)(raw0 & 0x7FFF), 0, 3300);
+                    ushort vmax = (ushort)Math.Clamp((int)BinaryPrimitives.ReadUInt16LittleEndian(p.AsSpan(2, 2)), vmin, 3300);
+                    ushort fth  = (ushort)Math.Clamp((int)BinaryPrimitives.ReadUInt16LittleEndian(p.AsSpan(4, 2)), 0, 2500);
+                    ushort frat = (ushort)Math.Clamp((int)BinaryPrimitives.ReadUInt16LittleEndian(p.AsSpan(6, 2)), fth + 10, 2550);
+                    _mockMapVMinMv = vmin;
+                    _mockMapVMaxMv = vmax;
+                    _mockMapFThreshCn = fth;
+                    _mockMapFRatedCn = frat;
+                    if (save) _mockMapSavedEeprom = true;
+                }
+                res.Add(new Frame(FrameType.RespOk, id, BuildMockMappingPayload(), seq));
+            }
+            else if (id == CanId.HapticGetCfg)
+            {
+                res.Add(new Frame(FrameType.RespOk, id, BuildMockMappingPayload(), seq));
+            }
             else if (id == CanId.StepGetInfo)
             {
                 byte[] payload = new byte[8];
@@ -851,6 +880,30 @@ namespace ControlGui.Core.TueUsb
         {
             var resp = Transact(new Frame(FrameType.Req, CanId.HapticDiag));
             return Decoders.HapticUartDiag(resp.Payload);
+        }
+
+        public HapticMappingConfig HapticSetConfig(double vMinV, double vMaxV, double fThreshN, double fRatedN, bool saveEeprom)
+        {
+            byte[] req = Encoders.HapticSetCfg(vMinV, vMaxV, fThreshN, fRatedN, saveEeprom);
+            var resp = Transact(new Frame(FrameType.Req, CanId.HapticSetCfg, req), timeoutSec: 1.0);
+            return Decoders.HapticMapping(resp.Payload);
+        }
+
+        public HapticMappingConfig HapticGetConfig()
+        {
+            var resp = Transact(new Frame(FrameType.Req, CanId.HapticGetCfg, Encoders.HapticGetCfg()), timeoutSec: 1.0);
+            return Decoders.HapticMapping(resp.Payload);
+        }
+
+        private byte[] BuildMockMappingPayload()
+        {
+            ushort packed0 = (ushort)((_mockMapVMinMv & 0x7FFF) | (_mockMapSavedEeprom ? 0x8000 : 0));
+            byte[] p = new byte[8];
+            BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(0, 2), packed0);
+            BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(2, 2), _mockMapVMaxMv);
+            BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(4, 2), _mockMapFThreshCn);
+            BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(6, 2), _mockMapFRatedCn);
+            return p;
         }
 
         public (ushort[] Channels, byte Status) ReadSpiAdcChannels(int? csIdx = null, double? timeoutSec = null)

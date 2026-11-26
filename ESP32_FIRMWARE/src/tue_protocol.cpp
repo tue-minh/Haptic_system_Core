@@ -151,6 +151,56 @@ static void handle_ping_frame(const uint8_t* frame)
                   (unsigned)(written ? written : TUE_FRAME_LEN));
 }
 
+static void send_mapping_reply(uint32_t can_id, uint8_t seq)
+{
+    uint16_t vmin = 0, vmax = 0, fth = 0, frat = 0;
+    bool saved = false;
+    hc_get_mapping(&vmin, &vmax, &fth, &frat, &saved);
+    uint16_t vmin_packed = (uint16_t)((vmin & 0x7FFFU) | (saved ? 0x8000U : 0U));
+
+    uint8_t payload[8];
+    payload[0] = (uint8_t)(vmin_packed & 0xFFU);
+    payload[1] = (uint8_t)((vmin_packed >> 8) & 0xFFU);
+    payload[2] = (uint8_t)(vmax & 0xFFU);
+    payload[3] = (uint8_t)((vmax >> 8) & 0xFFU);
+    payload[4] = (uint8_t)(fth & 0xFFU);
+    payload[5] = (uint8_t)((fth >> 8) & 0xFFU);
+    payload[6] = (uint8_t)(frat & 0xFFU);
+    payload[7] = (uint8_t)((frat >> 8) & 0xFFU);
+
+    uint8_t reply[TUE_FRAME_LEN];
+    build_tue_frame(FRAME_TYPE_RESP_OK, can_id, seq, payload, reply);
+    Serial2.write(reply, TUE_FRAME_LEN);
+}
+
+static void handle_cfg_frame(const uint8_t* frame)
+{
+    if (frame[2] != FRAME_TYPE_REQ || frame[7] != TUE_PAYLOAD_LEN) {
+        return;
+    }
+    const uint8_t* p = frame + 9;
+    uint16_t raw0     = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+    bool     save_nvs = (raw0 & 0x8000U) != 0;
+    uint16_t vmin     = raw0 & 0x7FFFU;
+    uint16_t vmax     = (uint16_t)p[2] | ((uint16_t)p[3] << 8);
+    uint16_t fth      = (uint16_t)p[4] | ((uint16_t)p[5] << 8);
+    uint16_t frat     = (uint16_t)p[6] | ((uint16_t)p[7] << 8);
+
+    hc_set_mapping(vmin, vmax, fth, frat, save_nvs);
+    send_mapping_reply(CAN_ID_HAPTIC_CFG, frame[8]);
+    Serial.printf("CFG 0x304 set vmin=%u vmax=%u fth=%u frat=%u nvs=%u\r\n",
+                  (unsigned)vmin, (unsigned)vmax, (unsigned)fth, (unsigned)frat,
+                  (unsigned)(save_nvs ? 1 : 0));
+}
+
+static void handle_get_cfg_frame(const uint8_t* frame)
+{
+    if (frame[2] != FRAME_TYPE_REQ) {
+        return;
+    }
+    send_mapping_reply(CAN_ID_HAPTIC_GET_CFG, frame[8]);
+}
+
 
 void send_beacon(bool announce)
 {
@@ -271,6 +321,10 @@ void process_uart2()
             // Ping/status request from the STM32 master; does NOT refresh the
             // haptic watchdog and does not touch the valve outputs.
             handle_ping_frame(frame);
+        } else if (can_id == CAN_ID_HAPTIC_CFG) {
+            handle_cfg_frame(frame);
+        } else if (can_id == CAN_ID_HAPTIC_GET_CFG) {
+            handle_get_cfg_frame(frame);
         }
         // Structurally valid frame with another CAN ID: ignored, not an error
         // (the watchdog still protects if no 0x300 frame ever arrives).

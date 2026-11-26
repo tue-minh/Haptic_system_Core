@@ -48,6 +48,10 @@ public partial class App : Application
             e.Args,
             a => string.Equals(a, "--valve-manual", StringComparison.OrdinalIgnoreCase));
 
+        bool supRing = Array.Exists(
+            e.Args,
+            a => string.Equals(a, "--sup-ring", StringComparison.OrdinalIgnoreCase));
+
         Window win;
         if (bandwidthOnly)
         {
@@ -69,6 +73,10 @@ public partial class App : Application
         else if (valveManual)
         {
             win = new ValveManualWindow { WindowStartupLocation = WindowStartupLocation.CenterScreen };
+        }
+        else if (supRing)
+        {
+            win = new SupRingControlWindow { WindowStartupLocation = WindowStartupLocation.CenterScreen };
         }
         else
         {

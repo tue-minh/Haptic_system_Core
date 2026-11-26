@@ -84,6 +84,8 @@
                         </Border>
                     </StackPanel>
                 </GroupBox>
+
+                <panels:HapticMappingPanel x:Name="PanelMapping" Margin="0,0,0,8"/>
             </StackPanel>
         </ScrollViewer>
 

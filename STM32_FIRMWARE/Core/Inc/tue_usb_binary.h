@@ -206,6 +206,10 @@ typedef enum {
  * last ping RX bytes, ping TX/timeout/reply counters). */
 #define TUE_USB_CAN_HAPTIC_DIAG      0x302U
 
+/* Set / Read ESP32 runtime force->voltage mapping config (forwarded via USART2). */
+#define TUE_USB_CAN_HAPTIC_CFG       0x304U
+#define TUE_USB_CAN_HAPTIC_GET_CFG   0x305U
+
 /* Reserved-range guard ------------------------------------------------------*/
 /* True for the reserved user-custom ranges: standard 0x300-0x3FF, 16-bit
  * 0x3000-0x3FFF and extended 0x30000000-0x3FFFFFFF. */

@@ -151,6 +151,13 @@ static void handle_usb_command(const char* cmd)
     } else if (strcmp(cmd, "B") == 0) {
         tue_beacon_toggle();
         send_line(tue_beacon_enabled() ? "BEACON ON" : "BEACON OFF");
+    } else if (strcmp(cmd, "M") == 0) {
+        uint16_t vmin = 0, vmax = 0, fth = 0, frat = 0;
+        bool saved = false;
+        hc_get_mapping(&vmin, &vmax, &fth, &frat, &saved);
+        Serial.printf("MAPPING vmin=%.3fV vmax=%.3fV fthresh=%.2fN frated=%.2fN nvs=%u\r\n",
+                      vmin / 1000.0f, vmax / 1000.0f, fth / 100.0f, frat / 100.0f,
+                      (unsigned)(saved ? 1 : 0));
     }
 }
 

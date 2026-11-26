@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <Preferences.h>
 #include "haptic_core.h"
 
 // ==============================================================================
@@ -12,6 +13,20 @@ static uint32_t last_packet_ms      = 0;
 static uint16_t consecutive_errors = 0;
 static uint8_t  recovery_count      = 0;
 static uint8_t  last_haptic_counter = 0;
+
+// Active force->voltage mapping parameters (boot defaults; runtime + NVS via 0x304/0x305)
+static uint16_t g_vmin_mv     = (uint16_t)(V_MIN * 1000.0f + 0.5f);
+static uint16_t g_vmax_mv     = (uint16_t)(V_MAX * 1000.0f + 0.5f);
+static uint16_t g_fthresh_cn  = (uint16_t)(F_THRESH * 100.0f + 0.5f);
+static uint16_t g_frated_cn   = (uint16_t)(F_RATED * 100.0f + 0.5f);
+static float    g_v_min       = V_MIN;
+static float    g_v_max       = V_MAX;
+static float    g_f_thresh    = F_THRESH;
+static float    g_f_rated     = F_RATED;
+static bool     g_saved_nvs   = false;
+static Preferences g_prefs;
+
+static constexpr uint8_t NVS_MAGIC = 0xA5;
 
 // Active output voltages [A, B, C, D, E]
 static float dac_voltage[DAC_COUNT] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
@@ -97,9 +112,10 @@ static bool write_dac(uint8_t channel, float voltage)
 
 bool set_voltage(uint8_t channel, float voltage)
 {
-    // Safety clamp: never output above V_MAX
+    // Safety clamp: never output above configured V_MAX or hardware V_HW_CEILING
     if (voltage < 0.0f) voltage = 0.0f;
-    if (voltage > V_MAX) voltage = V_MAX;
+    float ceil_v = (g_v_max < V_HW_CEILING) ? g_v_max : V_HW_CEILING;
+    if (voltage > ceil_v) voltage = ceil_v;
     if (!write_dac(channel, voltage)) {
         return false;
     }
@@ -173,21 +189,83 @@ int hc_i2c_scan(uint8_t* addr_out, int max_addrs)
 // HAPTIC TRANSFER FUNCTION & SAFETY VOLTAGE LIMITER
 // ==============================================================================
 
+static void apply_mapping_sanitized(uint16_t v_min_mv, uint16_t v_max_mv,
+                                    uint16_t f_thresh_cn, uint16_t f_rated_cn)
+{
+    uint16_t hw_ceil_mv = (uint16_t)(V_HW_CEILING * 1000.0f + 0.5f);
+    if (v_min_mv > hw_ceil_mv) v_min_mv = hw_ceil_mv;
+    if (v_max_mv > hw_ceil_mv) v_max_mv = hw_ceil_mv;
+    if (v_max_mv < v_min_mv)   v_max_mv = v_min_mv;
+
+    if (f_thresh_cn > 2500U) f_thresh_cn = 2500U;
+    if (f_rated_cn > 2550U)  f_rated_cn = 2550U;
+    if (f_rated_cn <= (uint16_t)(f_thresh_cn + 10U)) {
+        uint16_t min_rated = (uint16_t)(f_thresh_cn + 10U);
+        f_rated_cn = (min_rated <= 2550U) ? min_rated : 2550U;
+    }
+
+    g_vmin_mv    = v_min_mv;
+    g_vmax_mv    = v_max_mv;
+    g_fthresh_cn = f_thresh_cn;
+    g_frated_cn  = f_rated_cn;
+
+    g_v_min    = (float)v_min_mv / 1000.0f;
+    g_v_max    = (float)v_max_mv / 1000.0f;
+    g_f_thresh = (float)f_thresh_cn / 100.0f;
+    g_f_rated  = (float)f_rated_cn / 100.0f;
+}
+
+void hc_set_mapping(uint16_t v_min_mv, uint16_t v_max_mv,
+                    uint16_t f_thresh_cn, uint16_t f_rated_cn, bool save_nvs)
+{
+    apply_mapping_sanitized(v_min_mv, v_max_mv, f_thresh_cn, f_rated_cn);
+
+    if (save_nvs) {
+        if (g_prefs.begin("haptic_cfg", false)) {
+            g_prefs.putUChar("valid", NVS_MAGIC);
+            g_prefs.putUShort("vmin", g_vmin_mv);
+            g_prefs.putUShort("vmax", g_vmax_mv);
+            g_prefs.putUShort("fth",  g_fthresh_cn);
+            g_prefs.putUShort("frat", g_frated_cn);
+            g_prefs.end();
+            g_saved_nvs = true;
+        }
+    }
+
+    // Clamp any active DAC output that exceeds the newly lowered ceiling
+    for (uint8_t ch = 0; ch < DAC_COUNT; ch++) {
+        if (dac_voltage[ch] > g_v_max) {
+            set_voltage(ch, g_v_max);
+        }
+    }
+}
+
+void hc_get_mapping(uint16_t* v_min_mv, uint16_t* v_max_mv,
+                    uint16_t* f_thresh_cn, uint16_t* f_rated_cn, bool* saved_in_nvs)
+{
+    if (v_min_mv)     *v_min_mv = g_vmin_mv;
+    if (v_max_mv)     *v_max_mv = g_vmax_mv;
+    if (f_thresh_cn)  *f_thresh_cn = g_fthresh_cn;
+    if (f_rated_cn)   *f_rated_cn = g_frated_cn;
+    if (saved_in_nvs) *saved_in_nvs = g_saved_nvs;
+}
+
 float compute_valve_voltage(float force_n)
 {
-    if (force_n <= F_THRESH) {
+    if (force_n <= g_f_thresh) {
         return 0.0f;
     }
 
-    float ratio = (force_n - F_THRESH) / (F_RATED - F_THRESH);
+    float denom = g_f_rated - g_f_thresh;
+    float ratio = (denom > 0.01f) ? ((force_n - g_f_thresh) / denom) : 1.0f;
     if (ratio > 1.0f) {
         ratio = 1.0f;
     } else if (ratio < 0.0f) {
         ratio = 0.0f;
     }
 
-    float v_out = V_MIN + (V_MAX - V_MIN) * ratio;
-    return (v_out < V_MAX) ? v_out : V_MAX;
+    float v_out = g_v_min + (g_v_max - g_v_min) * ratio;
+    return (v_out < g_v_max) ? v_out : g_v_max;
 }
 
 
@@ -384,6 +462,24 @@ void haptic_core_init()
     breath_start        = millis();
     error_timer         = millis();
     error_phase         = 0;
+
+    // Load saved mapping parameters from NVS EEPROM if present
+    g_saved_nvs = false;
+    apply_mapping_sanitized((uint16_t)(V_MIN * 1000.0f + 0.5f),
+                            (uint16_t)(V_MAX * 1000.0f + 0.5f),
+                            (uint16_t)(F_THRESH * 100.0f + 0.5f),
+                            (uint16_t)(F_RATED * 100.0f + 0.5f));
+    if (g_prefs.begin("haptic_cfg", true)) {
+        if (g_prefs.getUChar("valid", 0) == NVS_MAGIC) {
+            uint16_t vmin = g_prefs.getUShort("vmin", g_vmin_mv);
+            uint16_t vmax = g_prefs.getUShort("vmax", g_vmax_mv);
+            uint16_t fth  = g_prefs.getUShort("fth",  g_fthresh_cn);
+            uint16_t frat = g_prefs.getUShort("frat", g_frated_cn);
+            apply_mapping_sanitized(vmin, vmax, fth, frat);
+            g_saved_nvs = true;
+        }
+        g_prefs.end();
+    }
 }
 
 

@@ -58,6 +58,10 @@ extern "C" {
 /** CAN identifier of the STM32-local USART2 link diagnostics frame. */
 #define TUE_HAPTIC_CAN_DIAG              0x00000302U
 
+/** CAN identifiers for runtime force->voltage mapping config on ESP32. */
+#define TUE_HAPTIC_CAN_CFG               0x00000304U
+#define TUE_HAPTIC_CAN_GET_CFG           0x00000305U
+
 /** Fixed wire frame size: 12 bytes framing + 8 bytes payload. */
 #define TUE_HAPTIC_FRAME_LEN             20U
 #define TUE_HAPTIC_PAYLOAD_LEN           8U
@@ -196,6 +200,17 @@ bool tue_haptic_forward(const uint8_t *frame, uint16_t len);
   * @note   Blocks the USB task for at most the ping timeout.
   */
 bool tue_haptic_ping(uint8_t seq, uint8_t token, uint8_t *out);
+
+/**
+  * @brief  Send runtime mapping config (CAN 0x304) to ESP32 over USART2 and wait
+  *         for RESP_OK carrying active values + EEPROM status.
+  */
+bool tue_haptic_set_cfg(uint8_t seq, const uint8_t *payload8, uint8_t *out);
+
+/**
+  * @brief  Query active force->voltage mapping config (CAN 0x305) from ESP32.
+  */
+bool tue_haptic_get_cfg(uint8_t seq, uint8_t *out);
 
 /**
   * @brief  Fill 8 bytes of UART link diagnostics (CAN 0x302).

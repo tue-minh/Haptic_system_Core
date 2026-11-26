@@ -72,6 +72,8 @@ static constexpr uint8_t MCP4725_ADDR[DAC_COUNT] = {
 #define CAN_ID_HAPTIC_TELEMETRY 0x300UL
 #define CAN_ID_HAPTIC_PING      0x301UL
 #define BEACON_CAN_ID           0x303UL
+#define CAN_ID_HAPTIC_CFG       0x304UL
+#define CAN_ID_HAPTIC_GET_CFG   0x305UL
 #define BEACON_PERIOD_MS        1000UL
 
 // TUE binary frame constants (20 bytes)
@@ -85,12 +87,13 @@ static constexpr uint8_t MCP4725_ADDR[DAC_COUNT] = {
 #define FRAME_TYPE_RESP_OK 0x02
 #define FRAME_TYPE_ASYNC   0x04
 
-// Haptic Safety & Failsafe Parameters
-#define V_MIN          0.70f   // Minimum opening voltage / mechanical deadband
-#define V_MAX          2.20f   // ABSOLUTE SAFETY LIMIT - never above this
-#define F_THRESH       0.20f   // Noise threshold for contact force (Newtons)
-#define F_RATED        20.00f  // Rated full-scale physical force (Newtons)
-#define V_WRITE_DELTA  0.015f   // Min voltage change before rewriting the DAC
+// Haptic Safety & Failsafe Parameters (boot defaults; runtime adjustable via 0x304)
+#define V_MIN          0.70f   // Default minimum opening voltage / mechanical deadband
+#define V_MAX          2.20f   // Default safety limit
+#define V_HW_CEILING   3.30f   // Absolute hardware DAC ceiling (VDD = 3.30V)
+#define F_THRESH       0.20f   // Default noise threshold for contact force (Newtons)
+#define F_RATED        20.00f  // Default full-scale physical force (Newtons)
+#define V_WRITE_DELTA  0.015f  // Min voltage change before rewriting the DAC
 
 #define WATCHDOG_TIMEOUT_MS    150UL // Lost UART signal > 150 ms -> vent to 0.0V
 #define CONSECUTIVE_ERRORS_MAX 5     // 5 consecutive CRC/frame errors -> vent to 0.0V

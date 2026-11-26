@@ -123,6 +123,8 @@ namespace ControlGui.Core.TueUsb
         public const uint HapticTelemetry = 0x300;
         public const uint HapticPing = 0x301;
         public const uint HapticDiag = 0x302;
+        public const uint HapticSetCfg = 0x304;
+        public const uint HapticGetCfg = 0x305;
 
         // Sensors / inputs (0x500 - 0x57F)
         public const uint SensorAdcCh0_3 = 0x500;

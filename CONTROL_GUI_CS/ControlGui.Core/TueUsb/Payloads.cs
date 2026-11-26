@@ -88,6 +88,50 @@ namespace ControlGui.Core.TueUsb
             $"rx={RxBytes}B err={RxErrors} last_ping_rx={LastPingRxBytes}B tx_fail={TxFail} timeouts={Timeouts} replies={Replies}";
     }
 
+    public record HapticMappingConfig(
+        double VMinV,
+        double VMaxV,
+        double FThreshN,
+        double FRatedN,
+        bool SavedInEeprom)
+    {
+        public static HapticMappingConfig Default => new(
+            Haptic.HapticConstants.VMin,
+            Haptic.HapticConstants.VMax,
+            Haptic.HapticConstants.ForceThresh,
+            Haptic.HapticConstants.ForceRated,
+            false);
+
+        public double SlopeVPerN
+        {
+            get
+            {
+                double denom = FRatedN - FThreshN;
+                return denom > 0.01 ? (VMaxV - VMinV) / denom : 0.0;
+            }
+        }
+
+        public double ComputeVoltage(double forceN) =>
+            Haptic.HapticConstants.ComputeValveVoltage(forceN, VMinV, VMaxV, FThreshN, FRatedN);
+
+        public string FormatEquationSummary()
+        {
+            double k = SlopeVPerN;
+            double b = VMinV - k * FThreshN;
+            string sign = b >= 0 ? "+" : "-";
+            return
+                $"k = ({VMaxV:F2} - {VMinV:F2}) / ({FRatedN:F2} - {FThreshN:F2}) = {k:F5} V/N\n" +
+                $"• F <= {FThreshN:F2} N           =>  V(F) = 0.000 V   (DAC = 0)\n" +
+                $"• {FThreshN:F2} < F < {FRatedN:F2} N  =>  V(F) = {VMinV:F2} + {k:F5}*(F - {FThreshN:F2}) = {k:F5}*F {sign} {Math.Abs(b):F4} V\n" +
+                $"• F >= {FRatedN:F2} N          =>  V(F) = {VMaxV:F3} V   (DAC = {Haptic.HapticConstants.VoltageToDac(VMaxV)})\n" +
+                $"• DAC_12bit(F) = floor(V(F) / 3.30 * 4095)   [min open DAC = {Haptic.HapticConstants.VoltageToDac(VMinV)}]";
+        }
+
+        public override string ToString() =>
+            $"Vmin={VMinV:F2}V, Vmax={VMaxV:F2}V, Fth={FThreshN:F2}N, Frated={FRatedN:F2}N" +
+            (SavedInEeprom ? " [EEPROM saved]" : " [RAM only]");
+    }
+
     public record SpiAdcFeedback(ushort[] Channels, byte Seq, byte Status, ushort RxOkCnt, ushort CrcErrCnt)
     {
         public bool AdcValid => (Status & 0x01) != 0;
@@ -351,6 +395,24 @@ namespace ControlGui.Core.TueUsb
             return p;
         }
 
+        public static byte[] HapticSetCfg(double vMinV, double vMaxV, double fThreshN, double fRatedN, bool saveEeprom)
+        {
+            ushort vminMv = (ushort)Math.Clamp((int)Math.Round(vMinV * 1000.0), 0, 3300);
+            ushort vmaxMv = (ushort)Math.Clamp((int)Math.Round(vMaxV * 1000.0), vminMv, 3300);
+            ushort fthCn  = (ushort)Math.Clamp((int)Math.Round(fThreshN * 100.0), 0, 2500);
+            ushort fratCn = (ushort)Math.Clamp((int)Math.Round(fRatedN * 100.0), fthCn + 10, 2550);
+            ushort packed0 = (ushort)((vminMv & 0x7FFF) | (saveEeprom ? 0x8000 : 0));
+
+            byte[] p = new byte[8];
+            BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(0, 2), packed0);
+            BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(2, 2), vmaxMv);
+            BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(4, 2), fthCn);
+            BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(6, 2), fratCn);
+            return p;
+        }
+
+        public static byte[] HapticGetCfg() => new byte[8];
+
         public static byte[] SensorAdcReq(int? csIdx = null)
         {
             return csIdx.HasValue ? new byte[] { (byte)(csIdx.Value & 0xFF) } : Array.Empty<byte>();
@@ -488,6 +550,23 @@ namespace ControlGui.Core.TueUsb
             byte timeouts = payload[6];
             byte replies = payload[7];
             return new HapticUartDiag(flags, errs, rxBytes, lastRx, txFail, timeouts, replies);
+        }
+
+        public static HapticMappingConfig HapticMapping(byte[] payload)
+        {
+            if (payload.Length < 8) throw new ArgumentException("HAPTIC_CFG payload must be 8 bytes");
+            ushort raw0 = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(0, 2));
+            bool saved  = (raw0 & 0x8000) != 0;
+            ushort vminMv = (ushort)(raw0 & 0x7FFF);
+            ushort vmaxMv = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(2, 2));
+            ushort fthCn  = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(4, 2));
+            ushort fratCn = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(6, 2));
+            return new HapticMappingConfig(
+                VMinV: vminMv / 1000.0,
+                VMaxV: vmaxMv / 1000.0,
+                FThreshN: fthCn / 100.0,
+                FRatedN: fratCn / 100.0,
+                SavedInEeprom: saved);
         }
 
         public static (ushort ch0, ushort ch1, ushort ch2, ushort ch3) SensorAdcCh0_3(byte[] payload)

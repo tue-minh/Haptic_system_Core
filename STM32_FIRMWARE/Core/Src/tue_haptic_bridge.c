@@ -150,11 +150,12 @@ static void build_wire_frame8(uint8_t *dst, uint8_t frame_type, uint32_t can_id,
 }
 
 /**
-  * @brief  Scan a sliding byte buffer for a valid 20-byte 0x301 RESP_OK frame
-  *         matching seq and token.
+  * @brief  Scan a sliding byte buffer for a valid 20-byte RESP_OK frame
+  *         matching expected_can_id and seq (plus optional payload[0] token).
   */
-static bool find_ping_reply_frame(const uint8_t *buf, uint8_t len,
-                                  uint8_t seq, uint8_t token, uint8_t *out)
+static bool find_reply_frame(const uint8_t *buf, uint8_t len,
+                             uint32_t expected_can_id, uint8_t seq,
+                             bool require_token0, uint8_t token, uint8_t *out)
 {
     if ((buf == NULL) || (len < TUE_HAPTIC_FRAME_LEN)) {
         return false;
@@ -174,10 +175,12 @@ static bool find_ping_reply_frame(const uint8_t *buf, uint8_t len,
                           ((uint32_t)p[4] << 8) |
                           ((uint32_t)p[5] << 16) |
                           ((uint32_t)p[6] << 24);
-        if ((can_id != TUE_HAPTIC_CAN_PING) ||
+        if ((can_id != expected_can_id) ||
             (p[7] != TUE_HAPTIC_PAYLOAD_LEN) ||
-            (p[8] != seq) ||
-            (p[9] != token)) {
+            (p[8] != seq)) {
+            continue;
+        }
+        if (require_token0 && (p[9] != token)) {
             continue;
         }
         uint8_t crc = tue_usb_crc8(
@@ -234,29 +237,30 @@ bool tue_haptic_forward(const uint8_t *frame, uint16_t len)
     return true;
 }
 
-bool tue_haptic_ping(uint8_t seq, uint8_t token, uint8_t *out)
+static bool haptic_uart_transact(uint32_t can_id, uint8_t seq,
+                               const uint8_t *req_payload8, bool require_token0,
+                               uint32_t attempt_timeout_ms, uint8_t attempts,
+                               uint8_t *out)
 {
-    uint8_t req_payload[TUE_HAPTIC_PAYLOAD_LEN];
     uint8_t req_frame[TUE_HAPTIC_FRAME_LEN];
     uint8_t rx_window[40];
     uint16_t rx_seen = 0U;
 
     g_tue_haptic_last_ping_rx_bytes = 0U;
 
-    if ((out == NULL) || !s_initialized) {
+    if ((req_payload8 == NULL) || (out == NULL) || !s_initialized) {
         g_tue_haptic_ping_timeouts++;
         return false;
     }
 
-    memset(req_payload, 0, sizeof(req_payload));
-    req_payload[0] = token;
     build_wire_frame8(req_frame, TUE_HAPTIC_FRAME_TYPE_REQ,
-                      TUE_HAPTIC_CAN_PING, seq, req_payload);
+                      can_id, seq, req_payload8);
 
-    /* Harvest any stale bytes before starting the ping transaction. */
+    /* Harvest any stale bytes before starting the transaction. */
     uart_drain_rx();
 
-    for (uint8_t attempt = 0U; attempt < TUE_HAPTIC_PING_ATTEMPTS; attempt++) {
+    uint8_t token0 = req_payload8[0];
+    for (uint8_t attempt = 0U; attempt < attempts; attempt++) {
         uint8_t win_len = 0U;
 
         if (!uart_write_bytes(req_frame, TUE_HAPTIC_FRAME_LEN, 20U)) {
@@ -264,7 +268,7 @@ bool tue_haptic_ping(uint8_t seq, uint8_t token, uint8_t *out)
             return false;
         }
 
-        uint32_t deadline = HAL_GetTick() + TUE_HAPTIC_PING_TIMEOUT_MS;
+        uint32_t deadline = HAL_GetTick() + attempt_timeout_ms;
         while ((int32_t)(deadline - HAL_GetTick()) > 0) {
             uint8_t b = 0U;
             if (!uart_poll_rx_byte(&b)) {
@@ -281,7 +285,8 @@ bool tue_haptic_ping(uint8_t seq, uint8_t token, uint8_t *out)
                 rx_window[sizeof(rx_window) - 1U] = b;
             }
 
-            if (find_ping_reply_frame(rx_window, win_len, seq, token, out)) {
+            if (find_reply_frame(rx_window, win_len, can_id, seq,
+                                 require_token0, token0, out)) {
                 g_tue_haptic_ping_replies++;
                 return true;
             }
@@ -290,6 +295,34 @@ bool tue_haptic_ping(uint8_t seq, uint8_t token, uint8_t *out)
 
     g_tue_haptic_ping_timeouts++;
     return false;
+}
+
+bool tue_haptic_ping(uint8_t seq, uint8_t token, uint8_t *out)
+{
+    uint8_t req_payload[TUE_HAPTIC_PAYLOAD_LEN];
+    memset(req_payload, 0, sizeof(req_payload));
+    req_payload[0] = token;
+    return haptic_uart_transact(TUE_HAPTIC_CAN_PING, seq, req_payload,
+                                true, TUE_HAPTIC_PING_TIMEOUT_MS,
+                                TUE_HAPTIC_PING_ATTEMPTS, out);
+}
+
+bool tue_haptic_set_cfg(uint8_t seq, const uint8_t *payload8, uint8_t *out)
+{
+    /* Allow up to 200 ms once when NVS flash write is requested */
+    bool save_nvs = (payload8 != NULL) && ((payload8[1] & 0x80U) != 0U);
+    return haptic_uart_transact(TUE_HAPTIC_CAN_CFG, seq, payload8,
+                                false, save_nvs ? 200U : TUE_HAPTIC_PING_TIMEOUT_MS,
+                                save_nvs ? 1U : TUE_HAPTIC_PING_ATTEMPTS, out);
+}
+
+bool tue_haptic_get_cfg(uint8_t seq, uint8_t *out)
+{
+    uint8_t req_payload[TUE_HAPTIC_PAYLOAD_LEN];
+    memset(req_payload, 0, sizeof(req_payload));
+    return haptic_uart_transact(TUE_HAPTIC_CAN_GET_CFG, seq, req_payload,
+                                false, TUE_HAPTIC_PING_TIMEOUT_MS,
+                                TUE_HAPTIC_PING_ATTEMPTS, out);
 }
 
 bool tue_haptic_ingest(const uint8_t *raw, uint16_t len)

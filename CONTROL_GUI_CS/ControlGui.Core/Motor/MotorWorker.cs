@@ -607,6 +607,65 @@ namespace ControlGui.Core.Motor
             _wakeEvent.Set();
         }
 
+        public void SetHapticMapping(double vMinV, double vMaxV, double fThreshN, double fRatedN, bool saveEeprom)
+        {
+            ExecuteHapticMappingOp(
+                label: "set config (0x304)",
+                op: c => c.HapticSetConfig(vMinV, vMaxV, fThreshN, fRatedN, saveEeprom));
+        }
+
+        public void ReadHapticMapping()
+        {
+            ExecuteHapticMappingOp(
+                label: "read config (0x305)",
+                op: c => c.HapticGetConfig());
+        }
+
+        private void ExecuteHapticMappingOp(string label, Func<TueUsbClient, HapticMappingConfig> op)
+        {
+            if (_client == null || !_client.IsConnected)
+            {
+                Update(s => s with
+                {
+                    HapticMappingStatus = $"ESP32 {label}: STM32 link not connected",
+                    HapticMappingOk = false,
+                    HapticMappingPending = false
+                });
+                return;
+            }
+
+            Update(s => s with { HapticMappingPending = true, HapticMappingStatus = $"ESP32 {label}: waiting..." });
+            _commandQueue.Enqueue(c =>
+            {
+                try
+                {
+                    var cfg = op(c);
+                    string text = $"ESP32 {label} OK: {cfg}";
+                    Update(s => s with
+                    {
+                        HapticMapping = cfg,
+                        HapticMappingStatus = text,
+                        HapticMappingOk = true,
+                        HapticMappingPending = false,
+                        HapticMappingSeq = s.HapticMappingSeq + 1
+                    });
+                    _log($"[motor {Port}] {text}");
+                }
+                catch (Exception ex)
+                {
+                    string msg = $"ESP32 {label} failed: {ex.Message}";
+                    Update(s => s with
+                    {
+                        HapticMappingStatus = msg,
+                        HapticMappingOk = false,
+                        HapticMappingPending = false
+                    });
+                    _log($"[motor {Port}] {msg}");
+                }
+            });
+            _wakeEvent.Set();
+        }
+
         // --- Worker Loop ---
         private void Run()
         {

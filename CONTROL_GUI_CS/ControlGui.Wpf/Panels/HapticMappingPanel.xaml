@@ -1,0 +1,79 @@
+<UserControl x:Class="ControlGui.Wpf.Panels.HapticMappingPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <GroupBox Header="ESP32 Mapping Thresholds (0x304 Set / 0x305 Read + EEPROM)" FontWeight="Bold" Margin="0,0,0,8">
+        <StackPanel Margin="6" TextElement.FontWeight="Normal">
+            <!-- 4 Runtime Mapping Parameters -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="92"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="96"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="V_min (V):" VerticalAlignment="Center" Margin="0,2"
+                           ToolTip="Minimum valve opening voltage when F &gt; F_thresh (0.00..3.30 V)"/>
+                <TextBox Grid.Row="0" Grid.Column="1" x:Name="TxtVMin" Text="0.70" Margin="0,2,8,2"
+                         FontFamily="Consolas" VerticalContentAlignment="Center" HorizontalContentAlignment="Right"
+                         TextChanged="OnParamTextChanged"/>
+
+                <TextBlock Grid.Row="0" Grid.Column="2" Text="V_max (V):" VerticalAlignment="Center" Margin="0,2"
+                           ToolTip="Maximum safe clamp voltage at F &gt;= F_rated (V_min..3.30 V)"/>
+                <TextBox Grid.Row="0" Grid.Column="3" x:Name="TxtVMax" Text="2.20" Margin="0,2"
+                         FontFamily="Consolas" VerticalContentAlignment="Center" HorizontalContentAlignment="Right"
+                         TextChanged="OnParamTextChanged"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="F_thresh (N):" VerticalAlignment="Center" Margin="0,2"
+                           ToolTip="Deadband contact noise threshold in Newtons (V = 0 when F &lt;= F_thresh)"/>
+                <TextBox Grid.Row="1" Grid.Column="1" x:Name="TxtFThresh" Text="0.20" Margin="0,2,8,2"
+                         FontFamily="Consolas" VerticalContentAlignment="Center" HorizontalContentAlignment="Right"
+                         TextChanged="OnParamTextChanged"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="2" Text="F_rated (N):" VerticalAlignment="Center" Margin="0,2"
+                           ToolTip="Force at which output saturates to V_max (&gt; F_thresh, max 25.5 N)"/>
+                <TextBox Grid.Row="1" Grid.Column="3" x:Name="TxtFRated" Text="20.00" Margin="0,2"
+                         FontFamily="Consolas" VerticalContentAlignment="Center" HorizontalContentAlignment="Right"
+                         TextChanged="OnParamTextChanged"/>
+            </Grid>
+
+            <!-- Action Bar: EEPROM Save + Read/Apply/Reset/Help -->
+            <WrapPanel Margin="0,6,0,4" VerticalAlignment="Center">
+                <CheckBox x:Name="ChkSaveEeprom" Content="Save to EEPROM (NVS)" IsChecked="True"
+                          VerticalAlignment="Center" Margin="0,0,10,4"
+                          ToolTip="Persist thresholds into ESP32 flash (NVS) across power cycles"/>
+                <Button x:Name="BtnRead" Content="Read ESP32 (0x305)" Padding="8,3" Margin="0,0,4,4"
+                        IsEnabled="False" Click="OnReadClick"/>
+                <Button x:Name="BtnApply" Content="Apply (0x304)" Padding="10,3" Margin="0,0,4,4"
+                        Background="#1976D2" Foreground="White" FontWeight="SemiBold"
+                        IsEnabled="False" Click="OnApplyClick"/>
+                <Button Content="Default" Padding="7,3" Margin="0,0,4,4" Click="OnDefaultClick"/>
+                <ToggleButton x:Name="BtnHelp" Content="? Equation Help" Padding="8,3" Margin="0,0,0,4"
+                              Checked="OnHelpToggled" Unchecked="OnHelpToggled"/>
+            </WrapPanel>
+
+            <!-- Live Equation Display -->
+            <Border Background="#F3F7FC" BorderBrush="#BBDEFB" BorderThickness="1" CornerRadius="3" Padding="6,4">
+                <StackPanel>
+                    <TextBlock Text="Live Force → Voltage Transfer Equation:" FontWeight="SemiBold" FontSize="11" Foreground="#0D47A1"/>
+                    <TextBlock x:Name="TxtEquation" FontFamily="Consolas" FontSize="10.5" Foreground="#212121"
+                               TextWrapping="Wrap" Margin="0,2,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Expandable Detailed Formula & Parameter Guide -->
+            <Border x:Name="PanelHelp" Visibility="Collapsed" Background="#FFFDE7" BorderBrush="#FFE082"
+                    BorderThickness="1" CornerRadius="3" Padding="8,6" Margin="0,6,0,0">
+                <TextBlock x:Name="TxtHelpDetail" FontSize="11" Foreground="#37474F" TextWrapping="Wrap"/>
+            </Border>
+
+            <!-- ESP32 Sync Status -->
+            <TextBlock x:Name="TxtStatus" Text="ESP32 config: not read yet (using default 0.70–2.20 V)"
+                       FontSize="11" Foreground="#616161" TextWrapping="Wrap" Margin="0,4,0,0"/>
+        </StackPanel>
+    </GroupBox>
+</UserControl>

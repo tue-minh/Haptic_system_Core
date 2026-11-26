@@ -507,8 +507,10 @@ static void usb_dispatch(const tue_usb_frame_t *f, const uint8_t *raw,
         }
         return;
     } else if ((f->can_id == TUE_USB_CAN_HAPTIC_PING) ||
-               (f->can_id == TUE_USB_CAN_HAPTIC_DIAG)) {
-        /* Ping the ESP32 slave over USART2, or report the local link state. */
+               (f->can_id == TUE_USB_CAN_HAPTIC_DIAG) ||
+               (f->can_id == TUE_USB_CAN_HAPTIC_CFG)  ||
+               (f->can_id == TUE_USB_CAN_HAPTIC_GET_CFG)) {
+        /* Ping, config, or report diagnostics for the ESP32 UART slave. */
         err = haptic_cmd(f, out, &out_dlc);
     } else if ((f->can_id >= TUE_USB_CAN_SENSOR_ADC_CH0_3) &&
                (f->can_id <= TUE_USB_CAN_SENSOR_ADC_RAW)) {
@@ -542,6 +544,25 @@ static int haptic_cmd(const tue_usb_frame_t *f, uint8_t *out, uint8_t *out_dlc)
 {
     if (f->can_id == TUE_USB_CAN_HAPTIC_DIAG) {
         tue_haptic_get_diag(out);
+        *out_dlc = TUE_HAPTIC_PAYLOAD_LEN;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    if (f->can_id == TUE_USB_CAN_HAPTIC_CFG) {
+        if (f->dlc < TUE_HAPTIC_PAYLOAD_LEN) {
+            return (int)TUE_USB_ERR_BAD_ARG;
+        }
+        if (!tue_haptic_set_cfg(f->seq, f->payload, out)) {
+            return (int)TUE_USB_ERR_TIMEOUT;
+        }
+        *out_dlc = TUE_HAPTIC_PAYLOAD_LEN;
+        return (int)TUE_USB_ERR_OK;
+    }
+
+    if (f->can_id == TUE_USB_CAN_HAPTIC_GET_CFG) {
+        if (!tue_haptic_get_cfg(f->seq, out)) {
+            return (int)TUE_USB_ERR_TIMEOUT;
+        }
         *out_dlc = TUE_HAPTIC_PAYLOAD_LEN;
         return (int)TUE_USB_ERR_OK;
     }

@@ -847,5 +847,187 @@ namespace ControlGui.Tests
                 }
             }
         }
+
+        [TestMethod]
+        public void TestSupRingMapperAndLogger()
+        {
+            // Verify I01 paper convention: -Fx->A, Fz->B, +Fx->C, -Fy->D, +Fy->E
+            var enc = new TueBinaryEncoder();
+
+            // 1. Slide Down (-Fx) + Squeeze (Fz)
+            var pSlideDown = SupRingMapper.BuildPayload(new SupRingState { Fx = -3.0, Fy = 0.0, Fz = 5.0 }, counter: 7);
+            Assert.AreEqual(30, pSlideDown[0], "A should encode -Fx (3.0 N = 30)");
+            Assert.AreEqual(50, pSlideDown[1], "B should encode Fz (5.0 N = 50)");
+            Assert.AreEqual(0,  pSlideDown[2], "C should be 0 when Fx < 0");
+            Assert.AreEqual(0,  pSlideDown[3]);
+            Assert.AreEqual(0,  pSlideDown[4]);
+            Assert.AreEqual(0,  pSlideDown[5]);
+            Assert.AreEqual((byte)(HapticConstants.FlagLeftContact | HapticConstants.FlagRightContact | HapticConstants.FlagSlip), pSlideDown[6]);
+            Assert.AreEqual(7,  pSlideDown[7]);
+
+            var wire = enc.Encode(pSlideDown);
+            Assert.AreEqual(HapticConstants.FrameLen, wire.Length);
+            Assert.AreEqual(0xAA, wire[0]);
+            Assert.AreEqual(0xAA, wire[^1]);
+
+            // 2. Slide Up (+Fx), Pull (-Fy), Push (+Fy)
+            var pSlideUp = SupRingMapper.BuildPayload(new SupRingState { Fx = 2.5, Fz = 1.0 }, 1);
+            Assert.AreEqual(0,  pSlideUp[0]);
+            Assert.AreEqual(25, pSlideUp[2]);
+
+            var pPull = SupRingMapper.BuildPayload(new SupRingState { Fy = -4.0, Fz = 10.0 }, 2);
+            Assert.AreEqual(40, pPull[3], "D should encode -Fy (Pull)");
+            Assert.AreEqual(0,  pPull[4]);
+            Assert.AreEqual((byte)(HapticConstants.FlagLeftContact | HapticConstants.FlagRightContact), pPull[6], "4/10=0.4 <= 0.50 -> no slip");
+
+            var pPush = SupRingMapper.BuildPayload(new SupRingState { Fy = 4.2, Fz = 10.0 }, 3);
+            Assert.AreEqual(0,  pPush[3]);
+            Assert.AreEqual(42, pPush[4], "E should encode +Fy (Push)");
+
+            // 3. Polar mapping check: 0->E, 90->A, 180->D, 270->C, 45->A & E equal
+            var (fx0, fy0) = SupRingMapper.FromPolar(5.0, 0.0);
+            Assert.AreEqual(0.0, fx0, 1e-6);
+            Assert.AreEqual(5.0, fy0, 1e-6);
+
+            var (fx90, fy90) = SupRingMapper.FromPolar(5.0, 90.0);
+            Assert.AreEqual(-5.0, fx90, 1e-6);
+            Assert.AreEqual(0.0, fy90, 1e-6);
+
+            var (fx180, fy180) = SupRingMapper.FromPolar(5.0, 180.0);
+            Assert.AreEqual(0.0, fx180, 1e-6);
+            Assert.AreEqual(-5.0, fy180, 1e-6);
+
+            var (fx270, fy270) = SupRingMapper.FromPolar(5.0, 270.0);
+            Assert.AreEqual(5.0, fx270, 1e-6);
+            Assert.AreEqual(0.0, fy270, 1e-6);
+
+            var (fx45, fy45) = SupRingMapper.FromPolar(10.0, 45.0);
+            var p45 = SupRingMapper.BuildPayload(new SupRingState { Fx = fx45, Fy = fy45 }, 0);
+            Assert.AreEqual(p45[0], p45[4], 1);
+
+            // 4. Manual flags + ReservedByte
+            var pMan = SupRingMapper.BuildPayload(new SupRingState
+            {
+                AutoFlags = false,
+                ManualFlags = HapticConstants.FlagTare | HapticConstants.FlagSlip,
+                ReservedByte = 0x5A
+            }, 99);
+            Assert.AreEqual(0x5A, pMan[5]);
+            Assert.AreEqual((byte)(HapticConstants.FlagTare | HapticConstants.FlagSlip), pMan[6]);
+            Assert.AreEqual(99, pMan[7]);
+
+            // 5. SQLite Logger
+            string testDir = Path.Combine(Path.GetTempPath(), "ControlGuiTests_SupRing_" + Guid.NewGuid());
+            Directory.CreateDirectory(testDir);
+            string dbPath = Path.Combine(testDir, "sup_ring_test.db");
+            try
+            {
+                using (var logger = new SupRingSqliteLogger())
+                {
+                    logger.Start(dbPath, 100.0, 3300.0);
+                    logger.Enqueue(new SupRingLogSample(0.01, 1.0, -3.0, 0.0, 5.0, 3.0, 90.0, pSlideDown, new ushort[] { 100, 200, 300, 400, 500 }, new double[] { 80.6, 161.2, 241.8, 322.3, 402.9 }));
+                    logger.Enqueue(new SupRingLogSample(0.02, 2.0, 0.0, 4.2, 10.0, 4.2, 0.0, pPush, new ushort[] { 101, 201, 301, 401, 501 }, new double[] { 81.4, 162.0, 242.6, 323.1, 403.7 }));
+                    Thread.Sleep(120);
+                    logger.Stop();
+                    Assert.AreEqual(2, logger.RowsLogged);
+                }
+
+                using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM samples";
+                Assert.AreEqual(2L, Convert.ToInt64(cmd.ExecuteScalar()));
+
+                cmd.CommandText = "SELECT byte_a, byte_b, byte_e FROM samples ORDER BY id ASC LIMIT 1";
+                using var r = cmd.ExecuteReader();
+                Assert.IsTrue(r.Read());
+                Assert.AreEqual(30, r.GetInt32(0));
+                Assert.AreEqual(50, r.GetInt32(1));
+                Assert.AreEqual(0, r.GetInt32(2));
+            }
+            finally
+            {
+                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                try { Directory.Delete(testDir, true); } catch { }
+            }
+        }
+
+        [TestMethod]
+        public void TestHapticMappingConfigProtocolAndMock()
+        {
+            byte[] encoded = Encoders.HapticSetCfg(0.85, 1.95, 0.35, 15.0, saveEeprom: true);
+            Assert.AreEqual(8, encoded.Length);
+            var decoded = Decoders.HapticMapping(encoded);
+            Assert.AreEqual(0.85, decoded.VMinV, 1e-3);
+            Assert.AreEqual(1.95, decoded.VMaxV, 1e-3);
+            Assert.AreEqual(0.35, decoded.FThreshN, 1e-2);
+            Assert.AreEqual(15.00, decoded.FRatedN, 1e-2);
+            Assert.IsTrue(decoded.SavedInEeprom);
+
+            Assert.AreEqual(0.0, decoded.ComputeVoltage(0.35), 1e-6);
+            double midForce = 0.5 * (0.35 + 15.0);
+            Assert.AreEqual(0.5 * (0.85 + 1.95), decoded.ComputeVoltage(midForce), 1e-3);
+            Assert.AreEqual(1.95, decoded.ComputeVoltage(25.0), 1e-6);
+
+            string eq = decoded.FormatEquationSummary();
+            StringAssert.Contains(eq, "k =");
+            StringAssert.Contains(eq, "0.85");
+            StringAssert.Contains(eq, "1.95");
+
+            using var client = new TueUsbClient("MOCK_PORT", mock: true);
+            client.Connect();
+            var initial = client.HapticGetConfig();
+            Assert.AreEqual(HapticConstants.VMin, initial.VMinV, 1e-3);
+            Assert.AreEqual(HapticConstants.VMax, initial.VMaxV, 1e-3);
+            Assert.IsFalse(initial.SavedInEeprom);
+
+            var updated = client.HapticSetConfig(0.90, 2.05, 0.30, 12.0, saveEeprom: true);
+            Assert.AreEqual(0.90, updated.VMinV, 1e-3);
+            Assert.AreEqual(2.05, updated.VMaxV, 1e-3);
+            Assert.AreEqual(0.30, updated.FThreshN, 1e-2);
+            Assert.AreEqual(12.00, updated.FRatedN, 1e-2);
+            Assert.IsTrue(updated.SavedInEeprom);
+
+            var readBack = client.HapticGetConfig();
+            Assert.AreEqual(0.90, readBack.VMinV, 1e-3);
+            Assert.IsTrue(readBack.SavedInEeprom);
+            client.Disconnect();
+
+            using var worker = new MotorWorker("MOCK_PORT");
+            worker.Start();
+            try
+            {
+                DateTime deadline = DateTime.UtcNow.AddSeconds(3);
+                while (!worker.Snapshot().Connected && DateTime.UtcNow < deadline)
+                    Thread.Sleep(20);
+                Assert.IsTrue(worker.Snapshot().Connected);
+
+                uint seqBefore = worker.Snapshot().HapticMappingSeq;
+                worker.SetHapticMapping(0.80, 1.80, 0.25, 10.0, false);
+                deadline = DateTime.UtcNow.AddSeconds(3);
+                while (worker.Snapshot().HapticMappingSeq == seqBefore && DateTime.UtcNow < deadline)
+                    Thread.Sleep(20);
+
+                var snap = worker.Snapshot();
+                Assert.IsTrue(snap.HapticMappingOk);
+                Assert.IsNotNull(snap.HapticMapping);
+                Assert.AreEqual(0.80, snap.HapticMapping!.VMinV, 1e-3);
+                Assert.AreEqual(1.80, snap.HapticMapping.VMaxV, 1e-3);
+                Assert.IsFalse(snap.HapticMapping.SavedInEeprom);
+
+                seqBefore = snap.HapticMappingSeq;
+                worker.ReadHapticMapping();
+                deadline = DateTime.UtcNow.AddSeconds(3);
+                while (worker.Snapshot().HapticMappingSeq == seqBefore && DateTime.UtcNow < deadline)
+                    Thread.Sleep(20);
+                Assert.AreEqual(10.00, worker.Snapshot().HapticMapping!.FRatedN, 1e-2);
+            }
+            finally
+            {
+                worker.Stop();
+            }
+        }
     }
 }

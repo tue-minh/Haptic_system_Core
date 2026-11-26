@@ -38,6 +38,12 @@ float compute_valve_voltage(float force_n);
 void  hc_notify_uart_error();     // ++consecutive_errors; trips vent + STATE_ERROR at max
 void  hc_reset_consecutive_errors();
 
+// Runtime force->voltage mapping config (0x304 / 0x305 + NVS persistence)
+void hc_set_mapping(uint16_t v_min_mv, uint16_t v_max_mv,
+                    uint16_t f_thresh_cn, uint16_t f_rated_cn, bool save_nvs);
+void hc_get_mapping(uint16_t* v_min_mv, uint16_t* v_max_mv,
+                    uint16_t* f_thresh_cn, uint16_t* f_rated_cn, bool* saved_in_nvs);
+
 // Introspection (tue_protocol ping reply / console diagnostics)
 uint8_t get_system_state();
 uint16_t get_consecutive_errors();
